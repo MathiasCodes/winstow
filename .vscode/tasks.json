@@ -1,0 +1,53 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Generate Coverage",
+            "type": "shell",
+            "command": "cargo",
+            "args": [
+                "llvm-cov",
+                "--lcov",
+                "--output-path",
+                "lcov.info"
+            ],
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Generate Coverage (HTML)",
+            "type": "shell",
+            "command": "cargo",
+            "args": [
+                "llvm-cov",
+                "--html"
+            ],
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Open Coverage Report",
+            "type": "shell",
+            "command": "cargo",
+            "args": [
+                "llvm-cov",
+                "--open"
+            ],
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        }
+    ]
+}
+

@@ -1,0 +1,30 @@
+# Rust
+/target/
+Cargo.lock
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.exe
+*.pdb
+
+# Distribution
+*.zip
+*.msi
+*.nupkg
+
+# Local config (don't commit personal config)
+.winstowrc
+
+# Coverage
+lcov.info
+*.profraw
+*.profdata

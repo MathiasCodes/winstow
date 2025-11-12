@@ -1,0 +1,43 @@
+# winstow configuration file
+# Place this file in one of the following locations:
+#   1. .winstowrc in current directory
+#   2. %USERPROFILE%\.winstowrc
+#   3. %APPDATA%\winstow\config.toml
+
+# Default stow directory
+# If not specified, uses current directory
+default-dir = "C:\\stow"
+
+# Default target directory
+# If not specified, uses home directory
+default-target = "C:\\Users\\YourName"
+
+# Default ignore patterns (glob syntax)
+# These files/directories will be skipped during stowing
+ignore = [
+    "*.bak",           # Backup files
+    "*.tmp",           # Temporary files
+    "*.swp",           # Vim swap files
+    "*~",              # Editor backup files
+    ".DS_Store",       # macOS metadata
+    "Thumbs.db",       # Windows thumbnails
+    "desktop.ini",     # Windows folder settings
+    ".git",            # Git repository
+    ".gitignore",      # Git ignore file
+    "node_modules",    # Node.js dependencies
+    "__pycache__",     # Python cache
+    "*.pyc",           # Python compiled files
+]
+
+# Default defer patterns
+# These files will be skipped ONLY if they already exist in the target,
+# allowing another package to manage them. If they don't exist, they will
+# be stowed normally.
+defer = [
+    "*.lock",          # Lock files
+]
+
+# Enable verbose mode by default
+# Set to true to see detailed output
+verbose = false
+
