@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on tags like v0.1.0, v1.0.0, etc.
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        profile: minimal
+        override: true
+    
+    - name: Build release binary
+      run: cargo build --release --verbose
+    
+    - name: Check binary size
+      run: |
+        $size = (Get-Item target/release/winstow.exe).Length / 1MB
+        Write-Output "Binary size: $size MB"
+        if ($size -gt 5) {
+          Write-Error "Binary size exceeds 5MB limit!"
+          exit 1
+        }
+    
+    - name: Get version from tag
+      id: get_version
+      run: |
+        $version = "${{ github.ref_name }}"
+        echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+        echo "Version: $version"
+      shell: pwsh
+    
+    - name: Create zip file
+      run: |
+        $version = "${{ steps.get_version.outputs.VERSION }}"
+        $zipName = "winstow-$version-windows-x64.zip"
+        Compress-Archive -Path target/release/winstow.exe, README.md, LICENSE -DestinationPath $zipName
+        echo "ZIP_NAME=$zipName" >> $env:GITHUB_OUTPUT
+        echo "Created: $zipName"
+      shell: pwsh
+      id: create_zip
+    
+    - name: Calculate SHA256 hashes
+      id: hashes
+      run: |
+        $exeHash = (Get-FileHash -Path target/release/winstow.exe -Algorithm SHA256).Hash
+        $zipHash = (Get-FileHash -Path "${{ steps.create_zip.outputs.ZIP_NAME }}" -Algorithm SHA256).Hash
+        echo "EXE_SHA256=$exeHash" >> $env:GITHUB_OUTPUT
+        echo "ZIP_SHA256=$zipHash" >> $env:GITHUB_OUTPUT
+        echo "EXE SHA256: $exeHash"
+        echo "ZIP SHA256: $zipHash"
+      shell: pwsh
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          target/release/winstow.exe
+          ${{ steps.create_zip.outputs.ZIP_NAME }}
+        body: |
+          ## Winstow ${{ steps.get_version.outputs.VERSION }}
+          
+          ### Installation
+          
+          **Option 1: Standalone executable**
+          Download `winstow.exe` and place it in your PATH.
+          
+          **Option 2: Zip package**
+          Download `${{ steps.create_zip.outputs.ZIP_NAME }}` and extract it.
+          
+          ### Checksums (SHA256)
+          
+          - `winstow.exe`: `${{ steps.hashes.outputs.EXE_SHA256 }}`
+          - `${{ steps.create_zip.outputs.ZIP_NAME }}`: `${{ steps.hashes.outputs.ZIP_SHA256 }}`
+          
+          ### Changes
+          
+          See [CHANGELOG.md](https://github.com/MathiasCodes/winstow/blob/main/CHANGELOG.md) for details.
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
