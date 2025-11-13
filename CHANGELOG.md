@@ -5,6 +5,16 @@ All notable changes to winstow will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Statically linked Visual C++ runtime (VCRUNTIME140.dll) to eliminate vcredist2022 dependency
+- Binary now only depends on Universal C Runtime (UCRT) which ships with Windows 10/11
+
+### Technical
+- Added `static_vcruntime` crate for hybrid linking approach
+- Reduced external dependencies for easier distribution
+
 ## [v0.2.1] - 2025-01-13
 
 ### Fixed

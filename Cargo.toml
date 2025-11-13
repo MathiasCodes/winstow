@@ -27,6 +27,9 @@ features = [
 [dev-dependencies]
 tempfile = "3.23.0"
 
+[target.'cfg(windows)'.build-dependencies]
+static_vcruntime = "2.0"
+
 [profile.release]
 opt-level = "z"        # Optimize for size
 lto = true             # Link-time optimization
