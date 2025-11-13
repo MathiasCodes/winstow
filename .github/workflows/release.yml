@@ -16,7 +16,31 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-    
+
+    - name: Verify version matches tag
+      run: |
+        $cargoToml = Get-Content Cargo.toml -Raw
+        if ($cargoToml -match 'version\s*=\s*"([^"]+)"') {
+          $cargoVersion = $matches[1]
+        } else {
+          Write-Error "Could not find version in Cargo.toml"
+          exit 1
+        }
+
+        $tagVersion = "${{ github.ref_name }}".TrimStart('v')
+
+        Write-Output "Cargo.toml version: $cargoVersion"
+        Write-Output "Git tag version: $tagVersion"
+
+        if ($cargoVersion -ne $tagVersion) {
+          Write-Error "❌ Version mismatch! Cargo.toml has '$cargoVersion' but tag is '$tagVersion'"
+          Write-Error "Please update the version in Cargo.toml to match the tag and create a new release."
+          exit 1
+        }
+
+        Write-Output "✅ Version check passed: $cargoVersion matches tag $tagVersion"
+      shell: pwsh
+
     - name: Install Rust
       uses: actions-rs/toolchain@v1
       with:
