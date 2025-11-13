@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.3.0] - 2025-01-13
+
 ### Changed
 - Statically linked Visual C++ runtime (VCRUNTIME140.dll) to eliminate vcredist2022 dependency
 - Binary now only depends on Universal C Runtime (UCRT) which ships with Windows 10/11
