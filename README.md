@@ -54,12 +54,9 @@ cargo build --release
 # Binary will be at target/release/winstow.exe
 ```
 
-### Option 3: Package Managers (Coming Soon)
+### Option 3: Package Managers
 
 ```powershell
-# Scoop
-scoop install winstow
-
 # WinGet
 winget install winstow
 ```
