@@ -25,6 +25,10 @@ pub struct Config {
     /// Default verbose mode
     #[serde(default)]
     pub verbose: bool,
+
+    /// Translate `dot-` prefixed entries to `.`-prefixed names (--dotfiles)
+    #[serde(default)]
+    pub dotfiles: bool,
 }
 
 impl Config {
@@ -87,6 +91,7 @@ impl Config {
         cli_dry_run: bool,
         cli_adopt: bool,
         cli_override_conflicts: bool,
+        cli_dotfiles: bool,
     ) -> Result<StowContext> {
         // Get effective directories (use CLI, then config, then defaults)
         let stow_dir = cli_dir
@@ -118,6 +123,9 @@ impl Config {
 
         let verbose = cli_verbose || self.verbose;
 
+        // dotfiles: enabled if set on the CLI or in the config file
+        let dotfiles = cli_dotfiles || self.dotfiles;
+
         StowContext::new(
             stow_dir,
             target_dir,
@@ -127,6 +135,7 @@ impl Config {
             cli_dry_run,
             cli_adopt,
             cli_override_conflicts,
+            dotfiles,
         )
     }
 }
@@ -147,6 +156,8 @@ pub struct StowContext {
     dry_run: bool,
     /// Conflict resolution strategy
     conflict_strategy: crate::stow::ConflictStrategy,
+    /// Translate `dot-foo` package entries to `.foo` in the target
+    dotfiles: bool,
 }
 
 impl StowContext {
@@ -161,6 +172,7 @@ impl StowContext {
         dry_run: bool,
         adopt: bool,
         override_conflicts: bool,
+        dotfiles: bool,
     ) -> crate::error::Result<Self> {
         use crate::logger;
 
@@ -179,6 +191,10 @@ impl StowContext {
             crate::stow::ConflictStrategy::Fail
         };
 
+        if dotfiles {
+            logger::verbose("  --dotfiles enabled: 'dot-' prefixed files will be stowed as '.'-prefixed");
+        }
+
         // Log patterns if verbose
         if !ignore.is_empty() {
             logger::verbose(&format!("  Ignore patterns: {:?}", ignore));
@@ -194,6 +210,7 @@ impl StowContext {
             defer,
             dry_run,
             conflict_strategy,
+            dotfiles,
         })
     }
 
@@ -215,6 +232,11 @@ impl StowContext {
     /// Get the conflict strategy
     pub fn conflict_strategy(&self) -> crate::stow::ConflictStrategy {
         self.conflict_strategy
+    }
+
+    /// Check if dotfiles translation (--dotfiles) is enabled
+    pub fn is_dotfiles(&self) -> bool {
+        self.dotfiles
     }
 
     /// Build a pattern set from the ignore and defer patterns
@@ -261,6 +283,54 @@ verbose = true
         assert_eq!(config.ignore, vec!["*.bak", ".DS_Store"]);
         assert_eq!(config.defer, vec!["*.lock"]);
         assert!(config.verbose);
+        assert!(!config.dotfiles);
+    }
+
+    #[test]
+    fn test_config_dotfiles_from_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join(".winstowrc");
+
+        fs::write(&config_path, "dotfiles = true\n").unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert!(config.dotfiles);
+
+        // Merged context should pick it up even without the CLI flag
+        let merged = config
+            .merge_with_cli(
+                None,
+                None,
+                vec![],
+                vec![],
+                false,
+                false, // dry_run
+                false, // adopt
+                false, // override_conflicts
+                false, // dotfiles (not passed on the CLI)
+            )
+            .unwrap();
+        assert!(merged.is_dotfiles());
+    }
+
+    #[test]
+    fn test_cli_dotfiles_enables_translation_without_config() {
+        let config = Config::default();
+        let merged = config
+            .merge_with_cli(
+                None,
+                None,
+                vec![],
+                vec![],
+                false,
+                false, // dry_run
+                false, // adopt
+                false, // override_conflicts
+                true, // dotfiles passed on the CLI
+            )
+            .unwrap();
+
+        assert!(merged.is_dotfiles());
     }
 
     #[test]
@@ -282,6 +352,7 @@ verbose = true
             ignore: vec!["*.config".to_string()],
             defer: vec!["*.config_defer".to_string()],
             verbose: false,
+            dotfiles: false,
         };
 
         let merged = config
@@ -294,6 +365,7 @@ verbose = true
                 false, // dry_run
                 false, // adopt
                 false, // override_conflicts
+                false, // dotfiles
             )
             .unwrap();
 
@@ -310,6 +382,7 @@ verbose = true
             ignore: vec!["*.config".to_string()],
             defer: vec!["*.config_defer".to_string()],
             verbose: true,
+            dotfiles: false,
         };
 
         let merged = config
@@ -322,6 +395,7 @@ verbose = true
                 false, // dry_run
                 false, // adopt
                 false, // override_conflicts
+                false, // dotfiles
             )
             .unwrap();
 

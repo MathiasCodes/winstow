@@ -21,6 +21,7 @@ I'm still learning Rust, so the code may not be the most idiomatic or efficient.
 - ✅ **Directory Folding**: Intelligent directory symlinking reduces link count
 - ✅ **Conflict Resolution**: `--adopt` and `--override` for handling existing files
 - ✅ **Pattern Matching**: `--ignore` and `--defer` for flexible file management
+- ✅ **Dotfiles Support**: `--dotfiles` to stow `dot-foo` files as `.foo` (like GNU Stow)
 - ✅ **Configuration Files**: Set defaults with `.winstowrc`
 - ✅ **Small & Fast**: Single ~600KB binary
 - ✅ **Safe**: Dry-run mode to preview changes before applying
@@ -131,6 +132,7 @@ C:\Users\USER\
 | | `--override` | Remove conflicting files (stow/restow only, destructive) |
 | | `--ignore PATTERN` | Skip files matching pattern (stow/restow only) |
 | | `--defer PATTERN` | Skip files matching pattern if they already exist in target (stow/restow only) |
+| | `--dotfiles` | Stow `dot-foo` files as `.foo` (stow/restow only) |
 | `-h` | `--help` | Show help message |
 | `-V` | `--version` | Show version |
 
@@ -177,6 +179,39 @@ winstow -d $USERPROFILE/Dotfiles -t $USERPROFILE Git-Bash
 
 # Now .gitconfig, .bashrc, and .inputrc are symlinks to your Dotfiles packages
 ```
+
+### Stowing Files with `dot-` Names
+
+Some people version-control their dotfiles without the leading dot (git ignores links
+to its own dotfiles inside the repo, and files without a leading dot are easier to see
+in editors/explorers). With `--dotfiles`, files and directories named `dot-foo` are
+stowed as `.foo`, matching GNU Stow behavior:
+
+```bash
+# Package layout (no leading dots)
+mypackage/
+├── dot-gitconfig
+├── dot-bashrc
+└── dot-config/
+    └── nvim/
+        └── init.lua
+
+# Stow with translation
+winstow --dotfiles mypackage
+
+# Result: ~/.gitconfig, ~/.bashrc, ~/.config/nvim/init.lua are symlinks
+```
+
+When unstowing, use the same flag so the links are found and removed:
+
+```bash
+winstow --dotfiles -D mypackage
+```
+
+**Note:** `--dotfiles` must be passed consistently for both stow and unstow — otherwise
+package entry `dot-bashrc` would be looked up as the literal name `dot-bashrc` in the
+target and the `.bashrc` link would not be removed. Files that already start with `.`
+(e.g. `.gitignore`) are left unchanged.
 
 ### Handling Conflicts
 
@@ -286,6 +321,9 @@ defer = ["*.lock"]
 
 # Enable verbose mode by default
 verbose = false
+
+# Enable dotfiles translation by default (--dotfiles)
+dotfiles = false
 ```
 
 CLI arguments always override config file settings.

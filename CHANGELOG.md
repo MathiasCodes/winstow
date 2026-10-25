@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `--dotfiles` option to stow `dot-` prefixed entries as `.`-prefixed (e.g. `dot-bashrc` becomes `.bashrc`), matching GNU Stow behavior. Use the same flag with unstow/restow to find and remove those links
+
+### Fixed
+- Unstow previously failed to remove directory symlinks on Windows ("Access is denied"); they are now removed correctly (this also fixes unstowing `dot-` directories stowed with `--dotfiles`)
+
 ## [v0.3.0] - 2025-01-13
 
 ### Changed

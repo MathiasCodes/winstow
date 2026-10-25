@@ -67,6 +67,7 @@ fn run(cli: Cli) -> Result<()> {
         cli.dry_run,
         cli.adopt,
         cli.override_conflicts,
+        cli.dotfiles,
     )?;
 
     logger::verbose(&format!("Stow directory: {}", context.stow_dir().display()));
@@ -173,12 +174,13 @@ mod tests {
             override_conflicts: false,
             ignore: vec![],
             defer: vec![],
+            dotfiles: false,
             packages: vec!["test".to_string()],
         };
 
         // Default action should be stow
         let result = run(cli);
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "{:?}", result);
     }
 
     #[test]
@@ -206,6 +208,7 @@ mod tests {
             override_conflicts: false,
             ignore: vec![],
             defer: vec![],
+            dotfiles: false,
             packages: vec!["test".to_string()],
         };
 
@@ -238,6 +241,7 @@ mod tests {
             override_conflicts: false,
             ignore: vec![],
             defer: vec![],
+            dotfiles: false,
             packages: vec!["test".to_string()],
         };
 

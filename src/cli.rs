@@ -50,6 +50,10 @@ pub struct Cli {
     #[arg(long = "defer", value_name = "PATTERN")]
     pub defer: Vec<String>,
 
+    /// Stow files named `dot-foo` as `.foo` (e.g. `dot-gitconfig` becomes `.gitconfig`)
+    #[arg(long = "dotfiles")]
+    pub dotfiles: bool,
+
     /// Package names to operate on
     #[arg(value_name = "PACKAGE", required = true)]
     pub packages: Vec<String>,
@@ -184,5 +188,16 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(cli.ignore, vec!["*.bak", "*.tmp"]);
+    }
+
+    #[test]
+    fn test_dotfiles_flag() {
+        let cli = Cli::try_parse_from(["winstow", "--dotfiles", "mypackage"]).unwrap();
+        assert!(cli.dotfiles);
+        assert_eq!(cli.action().unwrap(), Action::Stow);
+        assert!(cli.validate_flags().is_ok());
+
+        let cli = Cli::try_parse_from(["winstow", "mypackage"]).unwrap();
+        assert!(!cli.dotfiles);
     }
 }

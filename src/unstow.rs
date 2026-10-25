@@ -8,6 +8,8 @@ pub struct Unstower {
     stow_dir: PathBuf,
     target_dir: PathBuf,
     dry_run: bool,
+    /// Translate `dot-` prefixed names to `.`-prefixed names in the target (--dotfiles)
+    dotfiles: bool,
 }
 
 impl Unstower {
@@ -17,6 +19,7 @@ impl Unstower {
             stow_dir: context.stow_dir().to_owned(),
             target_dir: context.target_dir().to_owned(),
             dry_run: context.is_dry_run(),
+            dotfiles: context.is_dotfiles(),
         }
     }
 
@@ -32,6 +35,7 @@ impl Unstower {
             stow_dir: stow_dir.into(),
             target_dir: target_dir.into(),
             dry_run,
+            dotfiles: false,
         }
     }
 
@@ -81,7 +85,14 @@ impl Unstower {
             let entry = entry.map_err(|e| StowError::io_error(package_dir.to_path_buf(), e))?;
             let package_item = entry.path();
             let name = entry.file_name();
-            let target_item = target_dir.join(&name);
+
+            // With --dotfiles, package entries named `dot-foo` map to `.foo` in the target
+            let target_name = if self.dotfiles {
+                path_utils::dotfiles_name(&name)
+            } else {
+                name.clone()
+            };
+            let target_item = target_dir.join(&target_name);
 
             // Skip if target doesn't exist
             if !target_item.exists() {
@@ -207,6 +218,7 @@ impl Unstower {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stow::Stower;
     use std::fs::File;
     use tempfile::TempDir;
 
@@ -348,5 +360,69 @@ mod tests {
         let unstower = Unstower::new(&stow_dir, &target_dir, false, true);
         let result = unstower.unstow_package("mypackage");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_stow_and_unstow_with_dotfiles() {
+        let temp_dir = TempDir::new().unwrap();
+        let stow_dir = temp_dir.path().join("stow");
+        let target_dir = temp_dir.path().join("target");
+        fs::create_dir(&stow_dir).unwrap();
+        fs::create_dir(&target_dir).unwrap();
+
+        // Create a package with dot- prefixed files and directories
+        let package_dir = stow_dir.join("mypackage");
+        fs::create_dir(&package_dir).unwrap();
+        File::create(package_dir.join("dot-bashrc")).unwrap();
+        File::create(package_dir.join("dot-vimrc")).unwrap();
+        fs::create_dir(package_dir.join("dot-config")).unwrap();
+        File::create(package_dir.join("dot-config").join("settings")).unwrap();
+
+        let stower = Stower::new(&stow_dir, &target_dir, false, false).with_dotfiles(true);
+        stower.stow_package("mypackage").unwrap();
+
+        // Links should exist under the dot- names
+        assert!(target_dir.join(".bashrc").exists());
+        assert!(target_dir.join(".vimrc").exists());
+        assert!(target_dir.join(".config").join("settings").exists());
+
+        // Unstow for real with the same option
+        let mut unstower = Unstower::new(&stow_dir, &target_dir, false, false);
+        unstower.dotfiles = true;
+        unstower.unstow_package("mypackage").unwrap();
+
+        // Symlinks should be removed
+        assert!(!target_dir.join(".bashrc").exists());
+        assert!(!target_dir.join(".vimrc").exists());
+
+        // Package files remain untouched
+        assert!(package_dir.join("dot-bashrc").exists());
+        assert!(package_dir.join("dot-vimrc").exists());
+    }
+
+    #[test]
+    fn test_unstow_with_dotfiles_mismatch_fails_safely() {
+        // If --dotfiles was not used when stowing but is used when unstowing,
+        // package entry dot-bashrc would map to .bashrc which doesn't exist,
+        // so nothing should be removed
+        let temp_dir = TempDir::new().unwrap();
+        let stow_dir = temp_dir.path().join("stow");
+        let target_dir = temp_dir.path().join("target");
+        fs::create_dir(&stow_dir).unwrap();
+        fs::create_dir(&target_dir).unwrap();
+
+        let package_dir = stow_dir.join("mypackage");
+        fs::create_dir(&package_dir).unwrap();
+        File::create(package_dir.join("dot-bashrc")).unwrap();
+
+        let stower = Stower::new(&stow_dir, &target_dir, false, false).with_dotfiles(true);
+        stower.stow_package("mypackage").unwrap();
+
+        // Unstow with dotfiles disabled: dot-bashrc maps to literal name, which
+        // doesn't exist in target, so the .bashrc link must survive
+        let unstower = Unstower::new(&stow_dir, &target_dir, false, false);
+        unstower.unstow_package("mypackage").unwrap();
+
+        assert!(target_dir.join(".bashrc").exists());
     }
 }

@@ -21,6 +21,8 @@ pub struct Stower {
     dry_run: bool,
     conflict_strategy: ConflictStrategy,
     patterns: ignore::PatternSet,
+    /// Translate `dot-` prefixed names to `.`-prefixed names in the target (--dotfiles)
+    dotfiles: bool,
 }
 
 /// Decision for how to handle a directory
@@ -48,6 +50,7 @@ impl Stower {
             dry_run: context.is_dry_run(),
             conflict_strategy: context.conflict_strategy(),
             patterns,
+            dotfiles: context.is_dotfiles(),
         }
     }
 
@@ -65,6 +68,7 @@ impl Stower {
             dry_run,
             conflict_strategy: ConflictStrategy::Fail,
             patterns: ignore::PatternSet::empty(),
+            dotfiles: false,
         }
     }
 
@@ -79,6 +83,13 @@ impl Stower {
     #[cfg(test)]
     pub fn with_patterns(mut self, patterns: ignore::PatternSet) -> Self {
         self.patterns = patterns;
+        self
+    }
+
+    /// Enable dotfiles translation (--dotfiles)
+    #[cfg(test)]
+    pub fn with_dotfiles(mut self, dotfiles: bool) -> Self {
+        self.dotfiles = dotfiles;
         self
     }
 
@@ -137,7 +148,13 @@ impl Stower {
                 continue;
             }
 
-            let target_path = target_parent.join(&name);
+            // With --dotfiles, `dot-foo` entries are stowed as `.foo` in the target
+            let target_name = if self.dotfiles {
+                path_utils::dotfiles_name(&name)
+            } else {
+                name.clone()
+            };
+            let target_path = target_parent.join(&target_name);
 
             let metadata = entry
                 .metadata()
@@ -593,5 +610,62 @@ mod tests {
             .with_conflict_strategy(ConflictStrategy::Override);
         let result = stower.stow_package("mypackage");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_stow_with_dotfiles() {
+        let temp_dir = TempDir::new().unwrap();
+        let stow_dir = temp_dir.path().join("stow");
+        let target_dir = temp_dir.path().join("target");
+        fs::create_dir(&stow_dir).unwrap();
+        fs::create_dir(&target_dir).unwrap();
+
+        // Create a package with dot- prefixed files and directories
+        let package_dir = stow_dir.join("mypackage");
+        fs::create_dir(&package_dir).unwrap();
+        File::create(package_dir.join("dot-bashrc")).unwrap();
+        File::create(package_dir.join("regular.txt")).unwrap();
+        fs::create_dir(package_dir.join("dot-git")).unwrap();
+        File::create(package_dir.join("dot-git").join("config")).unwrap();
+
+        let stower = Stower::new(&stow_dir, &target_dir, false, false).with_dotfiles(true);
+
+        let result = stower.stow_package("mypackage");
+        assert!(result.is_ok(), "{:?}", result);
+
+        // dot-bashrc should be stowed as .bashrc
+        assert!(target_dir.join(".bashrc").exists());
+        assert!(fs_ops::is_symlink(&target_dir.join(".bashrc")));
+
+        // Regular files are unchanged
+        assert!(target_dir.join("regular.txt").exists());
+
+        // dot-git directory should be stowed as .git
+        assert!(target_dir.join(".git").join("config").exists());
+
+        // The dot- names should not exist in the target
+        assert!(!target_dir.join("dot-bashrc").exists());
+        assert!(!target_dir.join("dot-git").exists());
+    }
+
+    #[test]
+    fn test_stow_without_dotfiles_leaves_names_unchanged() {
+        let temp_dir = TempDir::new().unwrap();
+        let stow_dir = temp_dir.path().join("stow");
+        let target_dir = temp_dir.path().join("target");
+        fs::create_dir(&stow_dir).unwrap();
+        fs::create_dir(&target_dir).unwrap();
+
+        let package_dir = stow_dir.join("mypackage");
+        fs::create_dir(&package_dir).unwrap();
+        File::create(package_dir.join("dot-bashrc")).unwrap();
+
+        let stower = Stower::new(&stow_dir, &target_dir, false, false);
+        let result = stower.stow_package("mypackage");
+        assert!(result.is_ok(), "{:?}", result);
+
+        // Without --dotfiles, the literal name is used
+        assert!(target_dir.join("dot-bashrc").exists());
+        assert!(!target_dir.join(".bashrc").exists());
     }
 }

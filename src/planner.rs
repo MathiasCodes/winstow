@@ -120,7 +120,13 @@ fn execute_action(action: &Action, dry_run: bool) -> Result<()> {
             logger::action(&format!("Remove link: {}", path.display()));
 
             if !dry_run {
-                std::fs::remove_file(path).map_err(|e| StowError::io_error(path.clone(), e))?;
+                // Note: on Windows, directory symlinks cannot be deleted with
+                // remove_file (it fails with "Access is denied"), so fall back
+                // to remove_dir in that case. This covers broken dir symlinks too.
+                if std::fs::remove_file(path).is_err() {
+                    std::fs::remove_dir(path)
+                        .map_err(|e| StowError::io_error(path.clone(), e))?;
+                }
             }
         }
 
