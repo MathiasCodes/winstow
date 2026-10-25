@@ -261,6 +261,10 @@ These options only apply to stow and restow actions:
 - `--ignore <PATTERN>` - Skip files/directories matching the pattern (can be used multiple times)
 - `--defer <PATTERN>` - Skip stowing files matching the pattern only if they already exist in target (can be used multiple times)
 
+### Dotfiles Options
+
+- `--dotfiles` - Translate `dot-` prefixed package entries to `.`-prefixed names in the target. For example, `dot-bashrc` in the package is stowed as `.bashrc` in the target, and `dot-config` as `.config`. Applies to both files and directories, matching GNU Stow. Pass the same flag when unstowing/restowing so the translated names are found and their links removed. Entries already starting with `.` and bare `dot-` names are left unchanged.
+
 ### Examples
 
 ```bash
@@ -326,6 +330,7 @@ winstow --ignore "*.bak" --ignore ".DS_Store" mypackage
 5. **CLI Structure**: Similar command structure and options.
 6. **Ignore Patterns**: Supports ignore patterns like GNU Stow.
 7. **Adopt and Override**: Supports `--adopt` and `--override` options like GNU Stow.
+8. **Dotfiles Translation**: Supports `--dotfiles` like GNU Stow (`dot-foo` is stowed as `.foo`).
 
 ---
 

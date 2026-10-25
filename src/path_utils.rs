@@ -1,5 +1,22 @@
 use crate::error::{Result, StowError};
+use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
+
+/// Translate a `dot-` prefixed entry name to a `.`-prefixed name
+/// Used by the `--dotfiles` option, matching GNU Stow's behavior:
+/// a file named `dot-bashrc` in the package is stowed as `.bashrc` in the target.
+/// Names that do not start with `dot-` (or are exactly `dot-`) are returned unchanged.
+pub fn dotfiles_name(name: &OsStr) -> OsString {
+    let Some(rest) = name.to_str().and_then(|s| s.strip_prefix("dot-")) else {
+        return name.to_owned();
+    };
+
+    if rest.is_empty() {
+        return name.to_owned();
+    }
+
+    OsString::from(format!(".{}", rest))
+}
 
 /// Normalize a path to an absolute path with consistent separators
 /// Resolves `.` and `..` components and canonicalizes the path
@@ -317,5 +334,48 @@ mod tests {
         let _b = PathBuf::from("C:\\users\\test");
         // Note: This test may not work perfectly without actual filesystem access
         // but demonstrates the intent
+    }
+
+    #[test]
+    fn test_dotfiles_name_translates_dot_prefix() {
+        assert_eq!(
+            dotfiles_name(OsStr::new("dot-bashrc")),
+            OsString::from(".bashrc")
+        );
+    }
+
+    #[test]
+    fn test_dotfiles_name_translates_dirs() {
+        assert_eq!(
+            dotfiles_name(OsStr::new("dot-config")),
+            OsString::from(".config")
+        );
+    }
+
+    #[test]
+    fn test_dotfiles_name_leaves_regular_names_unchanged() {
+        assert_eq!(
+            dotfiles_name(OsStr::new("file.txt")),
+            OsString::from("file.txt")
+        );
+        assert_eq!(
+            dotfiles_name(OsStr::new("dotted")),
+            OsString::from("dotted")
+        );
+    }
+
+    #[test]
+    fn test_dotfiles_name_leaves_files_with_dot_prefix_unchanged() {
+        // Files already starting with "." are not touched
+        assert_eq!(
+            dotfiles_name(OsStr::new(".bashrc")),
+            OsString::from(".bashrc")
+        );
+    }
+
+    #[test]
+    fn test_dotfiles_name_bare_dot_prefix_unchanged() {
+        // Exactly "dot-" with nothing after it should not become "."
+        assert_eq!(dotfiles_name(OsStr::new("dot-")), OsString::from("dot-"));
     }
 }

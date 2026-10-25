@@ -29,6 +29,10 @@ pub struct Config {
     /// Never fold directories into directory symlinks
     #[serde(default, rename = "no-folding")]
     pub no_folding: bool,
+
+    /// Translate `dot-` prefixed entries to `.`-prefixed names (--dotfiles)
+    #[serde(default)]
+    pub dotfiles: bool,
 }
 
 impl Config {
@@ -92,6 +96,7 @@ impl Config {
         cli_adopt: bool,
         cli_override_conflicts: bool,
         cli_no_folding: bool,
+        cli_dotfiles: bool,
     ) -> Result<StowContext> {
         // Get effective directories (use CLI, then config, then defaults)
         let stow_dir = cli_dir
@@ -123,6 +128,8 @@ impl Config {
 
         let verbose = cli_verbose || self.verbose;
         let no_folding = cli_no_folding || self.no_folding;
+        // dotfiles: enabled if set on the CLI or in the config file
+        let dotfiles = cli_dotfiles || self.dotfiles;
 
         let context = StowContext::new(
             stow_dir,
@@ -135,7 +142,7 @@ impl Config {
             cli_override_conflicts,
         )?;
 
-        Ok(context.with_no_folding(no_folding))
+        Ok(context.with_no_folding(no_folding).with_dotfiles(dotfiles))
     }
 }
 
@@ -157,6 +164,8 @@ pub struct StowContext {
     conflict_strategy: crate::stow::ConflictStrategy,
     /// Never fold directories into directory symlinks
     no_folding: bool,
+    /// Translate `dot-foo` package entries to `.foo` in the target
+    dotfiles: bool,
 }
 
 impl StowContext {
@@ -205,6 +214,7 @@ impl StowContext {
             dry_run,
             conflict_strategy,
             no_folding: false,
+            dotfiles: false,
         })
     }
 
@@ -214,6 +224,17 @@ impl StowContext {
             crate::logger::verbose("  --no-folding enabled: will create real directories");
         }
         self.no_folding = no_folding;
+        self
+    }
+
+    /// Enable or disable translation of `dot-foo` package entries to `.foo`
+    pub fn with_dotfiles(mut self, dotfiles: bool) -> Self {
+        if dotfiles {
+            crate::logger::verbose(
+                "  --dotfiles enabled: 'dot-' prefixed files will be stowed as '.'-prefixed",
+            );
+        }
+        self.dotfiles = dotfiles;
         self
     }
 
@@ -240,6 +261,11 @@ impl StowContext {
     /// Get the conflict strategy
     pub fn conflict_strategy(&self) -> crate::stow::ConflictStrategy {
         self.conflict_strategy
+    }
+
+    /// Check if dotfiles translation (--dotfiles) is enabled
+    pub fn is_dotfiles(&self) -> bool {
+        self.dotfiles
     }
 
     /// Build a pattern set from the ignore and defer patterns
@@ -286,6 +312,56 @@ verbose = true
         assert_eq!(config.ignore, vec!["*.bak", ".DS_Store"]);
         assert_eq!(config.defer, vec!["*.lock"]);
         assert!(config.verbose);
+        assert!(!config.dotfiles);
+    }
+
+    #[test]
+    fn test_config_dotfiles_from_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join(".winstowrc");
+
+        fs::write(&config_path, "dotfiles = true\n").unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert!(config.dotfiles);
+
+        // Merged context should pick it up even without the CLI flag
+        let merged = config
+            .merge_with_cli(
+                None,
+                None,
+                vec![],
+                vec![],
+                false,
+                false, // dry_run
+                false, // adopt
+                false, // override_conflicts
+                false, // no_folding
+                false, // dotfiles (not passed on the CLI)
+            )
+            .unwrap();
+        assert!(merged.is_dotfiles());
+    }
+
+    #[test]
+    fn test_cli_dotfiles_enables_translation_without_config() {
+        let config = Config::default();
+        let merged = config
+            .merge_with_cli(
+                None,
+                None,
+                vec![],
+                vec![],
+                false,
+                false, // dry_run
+                false, // adopt
+                false, // override_conflicts
+                false, // no_folding
+                true,  // dotfiles passed on the CLI
+            )
+            .unwrap();
+
+        assert!(merged.is_dotfiles());
     }
 
     #[test]
@@ -308,6 +384,7 @@ verbose = true
             defer: vec!["*.config_defer".to_string()],
             verbose: false,
             no_folding: false,
+            dotfiles: false,
         };
 
         let merged = config
@@ -321,6 +398,7 @@ verbose = true
                 false, // adopt
                 false, // override_conflicts
                 true,  // no_folding
+                false, // dotfiles
             )
             .unwrap();
 
@@ -339,6 +417,7 @@ verbose = true
             defer: vec!["*.config_defer".to_string()],
             verbose: true,
             no_folding: true,
+            dotfiles: false,
         };
 
         let merged = config
@@ -352,6 +431,7 @@ verbose = true
                 false, // adopt
                 false, // override_conflicts
                 false, // no_folding
+                false, // dotfiles
             )
             .unwrap();
 
