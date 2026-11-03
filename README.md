@@ -472,6 +472,13 @@ cargo test -- --nocapture
 cargo test -- --ignored
 ```
 
+On Windows systems that use Docker instead of a local Rust toolchain, run
+`bash check-windows-docker.sh` from Git Bash. This builds `winstow.exe` and the
+test executables in Docker, then runs the tests on Windows so symlink behavior
+is tested on the actual host. The script expects the `rust-docker` skill scripts
+in `~/.claude/skills/rust-docker/scripts`; set `RUST_DOCKER_SCRIPTS` if they
+are installed elsewhere. Docker Desktop and Developer Mode must be enabled.
+
 ## Contributing
 
 Contributions are welcome! Please:
