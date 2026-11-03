@@ -78,6 +78,13 @@ The `stow` command creates symbolic links from package directories to the target
 - Use relative symlinks: compute the relative path from the link location to the target file.
 - If the target file path already exists and is not a symlink → **conflict**.
 
+#### Dangling Links
+
+A dangling (invalid) symlink is one whose target does not exist, e.g. after a file in a package has been renamed.
+Aligned with GNU Stow:
+- A dangling link pointing into the stow directory is owned by stow and is replaced by the new link (files and directories).
+- A dangling link pointing elsewhere was created by the user and is a **conflict**.
+
 #### Conflict Detection
 
 A conflict occurs when:
@@ -126,6 +133,7 @@ The `unstow` command removes symbolic links created by `stow` and prunes empty d
 - Resolve symlinks to determine their actual targets.
 - Only remove symlinks that point to the specified package (ignore symlinks from other packages).
 - Handle both absolute and relative symlinks correctly.
+- In every target directory visited, also remove dangling symlinks pointing into the corresponding package directory, even if the package no longer has an entry of that name (renamed or deleted files). Dangling links into other packages or outside the stow directory are kept.
 
 #### Pruning Algorithm
 

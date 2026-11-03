@@ -169,6 +169,10 @@ impl Stower {
         // Normalize source path once at the start to avoid repeated syscalls
         let source_norm = path_utils::normalize_path(source_path)?;
 
+        if !self.plan_replace_dangling_link(target_path, plan)? {
+            return Ok(());
+        }
+
         // Check if target exists
         if target_path.exists() {
             // Check if this path should be deferred (only when target exists)
@@ -226,6 +230,10 @@ impl Stower {
                 "Deferring: {} (already exists)",
                 source_path.display()
             ));
+            return Ok(());
+        }
+
+        if !self.plan_replace_dangling_link(target_path, plan)? {
             return Ok(());
         }
 
@@ -342,6 +350,37 @@ impl Stower {
 
         plan.add_conflict(target_path);
         Ok(false)
+    }
+
+    /// Plan the removal of a dangling symlink at `target_path` that stow owns,
+    /// e.g. one left behind after a file in a package has been renamed
+    /// A dangling link pointing outside the stow directory is a conflict
+    /// Returns whether `target_path` is free for a new link, or was never a dangling link
+    fn plan_replace_dangling_link(
+        &self,
+        target_path: &Path,
+        plan: &mut planner::Plan,
+    ) -> Result<bool> {
+        if !fs_ops::is_symlink(target_path) || target_path.exists() {
+            return Ok(true);
+        }
+
+        let link_target_norm = self.resolve_link(target_path)?;
+        if !path_utils::is_within(&link_target_norm, &self.stow_dir) {
+            plan.add_conflict(target_path);
+            return Ok(false);
+        }
+
+        logger::verbose(&format!(
+            "Replacing dangling link: {} -> {}",
+            target_path.display(),
+            link_target_norm.display()
+        ));
+        plan.add(planner::Action::RemoveLink {
+            path: target_path.to_path_buf(),
+        });
+
+        Ok(true)
     }
 
     /// Resolve the target of the symlink at `link_path` to an absolute path

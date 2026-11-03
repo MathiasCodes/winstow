@@ -10,16 +10,57 @@ pub fn normalize_path(path: impl AsRef<Path>) -> Result<PathBuf> {
     match path.canonicalize() {
         Ok(canonical) => Ok(canonical),
         Err(_e) => {
-            // If canonicalize fails (e.g., path doesn't exist), try to make it absolute
-            if path.is_absolute() {
-                Ok(path.to_owned())
+            // If canonicalize fails (e.g., path doesn't exist), make it absolute,
+            // resolve . and .. lexically as Windows does, and canonicalize the part that exists,
+            // so that the result compares equal to canonical paths
+            let absolute = if path.is_absolute() {
+                path.to_owned()
             } else {
                 std::env::current_dir()
                     .map(|cwd| cwd.join(path))
-                    .map_err(|io_err| StowError::io_error(path.to_owned(), io_err))
-            }
+                    .map_err(|io_err| StowError::io_error(path.to_owned(), io_err))?
+            };
+            Ok(canonicalize_existing_prefix(&clean_lexically(&absolute)))
         }
     }
+}
+
+/// Resolve `.` and `..` components without accessing the filesystem
+fn clean_lexically(path: &Path) -> PathBuf {
+    let mut cleaned = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                // Never remove the prefix or root
+                if matches!(cleaned.components().next_back(), Some(Component::Normal(_))) {
+                    cleaned.pop();
+                }
+            }
+            other => cleaned.push(other),
+        }
+    }
+    cleaned
+}
+
+/// Canonicalize the longest existing ancestor of `path` and append the remaining components
+fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
+    let mut missing = Vec::new();
+    let mut existing = path;
+
+    while let Some(parent) = existing.parent() {
+        if let Some(name) = existing.file_name() {
+            missing.push(name);
+        }
+        existing = parent;
+
+        if let Ok(mut canonical) = existing.canonicalize() {
+            canonical.extend(missing.iter().rev());
+            return canonical;
+        }
+    }
+
+    path.to_owned()
 }
 
 /// Compute a relative path from one location to another
@@ -237,6 +278,35 @@ mod tests {
         let path = PathBuf::from("C:\\stow2\\pkg");
 
         assert!(!is_within(&path, &base));
+    }
+
+    #[test]
+    fn normalize_path_missing_path_matches_canonical_parent() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let missing = temp_dir.path().join("sub").join("..").join("missing.txt");
+
+        let normalized = normalize_path(&missing).unwrap();
+
+        let expected = temp_dir.path().canonicalize().unwrap().join("missing.txt");
+        assert_eq!(normalized, expected);
+    }
+
+    #[test]
+    fn normalize_path_missing_path_is_within_canonical_base() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let missing = temp_dir.path().join("pkg").join("gone").join("file.txt");
+
+        assert!(is_within(
+            normalize_path(&missing).unwrap(),
+            temp_dir.path()
+        ));
+    }
+
+    #[test]
+    fn clean_lexically_never_removes_root() {
+        let cleaned = clean_lexically(Path::new("C:\\..\\a\\.\\b\\..\\c"));
+
+        assert_eq!(cleaned, PathBuf::from("C:\\a\\c"));
     }
 
     #[test]

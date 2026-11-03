@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--adopt` and `--override` no longer move or remove files before all conflicts of a package are known; a package with an unresolvable conflict is left unchanged
 - `--override` now replaces file links of other packages instead of failing with `WIN32_ERROR(183)`
 - `--adopt` no longer tries to adopt a file in place of a package directory; this is reported as a conflict
+- Stowing over a dangling symlink into the stow directory replaces it instead of failing with `WIN32_ERROR(183)`; dangling links pointing elsewhere are reported as conflicts
+- Unstowing and restowing remove dangling links into the package left behind by renamed or deleted package files
 
 ### Changed
 - Directory symlinks pointing outside the stow directory are reported as conflicts instead of being unfolded

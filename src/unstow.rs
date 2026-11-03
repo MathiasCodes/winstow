@@ -78,6 +78,8 @@ impl Unstower {
 
         // Names of target entries that are planned for removal
         let mut removed_names = HashSet::new();
+        // Names of package entries
+        let mut package_names = HashSet::new();
 
         // Read the package directory to know what to look for
         let entries = fs::read_dir(package_dir)
@@ -88,6 +90,7 @@ impl Unstower {
             let package_item = entry.path();
             let name = entry.file_name();
             let target_item = target_dir.join(&name);
+            package_names.insert(name_key(&name));
 
             // Skip if target doesn't exist
             if !target_item.exists() {
@@ -106,6 +109,23 @@ impl Unstower {
 
             if removed {
                 removed_names.insert(name_key(&name));
+            }
+        }
+
+        // Remove dangling links into this package left behind by renamed or deleted entries
+        let target_entries = fs::read_dir(target_dir)
+            .map_err(|e| StowError::io_error(target_dir.to_path_buf(), e))?;
+        for entry in target_entries {
+            let entry = entry.map_err(|e| StowError::io_error(target_dir.to_path_buf(), e))?;
+            let key = name_key(&entry.file_name());
+            if package_names.contains(&key) {
+                continue;
+            }
+
+            let target_item = entry.path();
+            if self.is_dangling_link_into(&target_item, package_dir)? {
+                plan.add(planner::Action::RemoveLink { path: target_item });
+                removed_names.insert(key);
             }
         }
 
@@ -211,20 +231,35 @@ impl Unstower {
 
     /// Check whether the symlink at `link_path` points to `package_path`
     fn link_points_to(&self, link_path: &Path, package_path: &Path) -> Result<bool> {
-        let link_target = fs_ops::read_symlink(link_path)?;
-        let link_target_abs = if link_target.is_relative() {
-            link_path.parent().unwrap_or(link_path).join(&link_target)
-        } else {
-            link_target
-        };
-
         // Normalize both paths for comparison
-        let link_target_norm = path_utils::normalize_path(&link_target_abs)?;
+        let link_target_norm = resolve_link(link_path)?;
         let package_path_norm = path_utils::normalize_path(package_path)?;
 
         let points_to = path_utils::paths_equal(&link_target_norm, &package_path_norm);
         Ok(points_to)
     }
+
+    /// Check whether `path` is a symlink whose target is missing and would be below `package_dir`
+    fn is_dangling_link_into(&self, path: &Path, package_dir: &Path) -> Result<bool> {
+        if !fs_ops::is_symlink(path) || path.exists() {
+            return Ok(false);
+        }
+
+        let link_target_norm = resolve_link(path)?;
+        Ok(path_utils::is_within(&link_target_norm, package_dir))
+    }
+}
+
+/// Resolve the target of the symlink at `link_path` to an absolute path
+fn resolve_link(link_path: &Path) -> Result<PathBuf> {
+    let link_target = fs_ops::read_symlink(link_path)?;
+    let link_target_abs = if link_target.is_relative() {
+        link_path.parent().unwrap_or(link_path).join(&link_target)
+    } else {
+        link_target
+    };
+
+    path_utils::normalize_path(&link_target_abs)
 }
 
 /// Key for comparing file names case-insensitively, as Windows does
