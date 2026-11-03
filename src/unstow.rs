@@ -208,6 +208,7 @@ impl Unstower {
         refolded: &HashMap<String, PathBuf>,
     ) -> Result<Option<PathBuf>> {
         let mut common_parent: Option<PathBuf> = None;
+        let mut remaining_names = HashSet::new();
 
         let entries = fs::read_dir(target_dir)
             .map_err(|e| StowError::io_error(target_dir.to_path_buf(), e))?;
@@ -218,6 +219,7 @@ impl Unstower {
             if removed_names.contains(&key) {
                 continue;
             }
+            remaining_names.insert(key.clone());
 
             let path = entry.path();
             let link_target = if let Some(link_target) = refolded.get(&key) {
@@ -244,12 +246,24 @@ impl Unstower {
             }
         }
 
-        // Only fold into a directory inside a package, never into the stow directory itself
-        Ok(common_parent.filter(|parent| {
-            parent.is_dir()
-                && path_utils::is_within(parent, &self.stow_dir)
-                && !path_utils::paths_equal(parent, &self.stow_dir)
-        }))
+        let Some(parent) = common_parent else {
+            return Ok(None);
+        };
+        if !parent.is_dir()
+            || !path_utils::is_within(&parent, &self.stow_dir)
+            || path_utils::paths_equal(&parent, &self.stow_dir)
+        {
+            return Ok(None);
+        }
+
+        // Folding would expose every source entry, including entries omitted by
+        // --ignore or entries whose target name differs under --dotfiles.
+        let mut source_names = HashSet::new();
+        for entry in fs::read_dir(&parent).map_err(|e| StowError::io_error(parent.clone(), e))? {
+            let entry = entry.map_err(|e| StowError::io_error(parent.clone(), e))?;
+            source_names.insert(name_key(&entry.file_name()));
+        }
+        Ok((source_names == remaining_names).then_some(parent))
     }
 
     /// Plan replacing `target_dir` by a directory symlink to `fold_target`

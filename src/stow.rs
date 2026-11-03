@@ -315,7 +315,7 @@ impl Stower {
         target_path: &Path,
         plan: &mut planner::Plan,
     ) -> Result<()> {
-        if self.no_folding {
+        if !self.can_fold(source_path)? {
             plan.add(planner::Action::CreateDir {
                 path: target_path.to_path_buf(),
             });
@@ -336,6 +336,46 @@ impl Stower {
         });
 
         Ok(())
+    }
+
+    /// A directory link exposes the entire source tree. Traverse instead when
+    /// an entry below it must be translated or ignored.
+    fn can_fold(&self, source_path: &Path) -> Result<bool> {
+        if self.no_folding {
+            return Ok(false);
+        }
+
+        let mut pending = vec![source_path.to_path_buf()];
+        let mut visited = HashSet::new();
+        while let Some(dir) = pending.pop() {
+            let canonical = dir
+                .canonicalize()
+                .map_err(|e| StowError::io_error(dir.clone(), e))?;
+            if !visited.insert(canonical) {
+                return Ok(false);
+            }
+
+            let entries = fs::read_dir(&dir).map_err(|e| StowError::io_error(dir.clone(), e))?;
+            for entry in entries {
+                let entry = entry.map_err(|e| StowError::io_error(dir.clone(), e))?;
+                let path = entry.path();
+                let name = entry.file_name();
+                if self.patterns.should_ignore(&path)
+                    || self.dotfiles && path_utils::dotfiles_name(&name) != name
+                {
+                    return Ok(false);
+                }
+
+                let metadata = entry
+                    .metadata()
+                    .map_err(|e| StowError::io_error(path.clone(), e))?;
+                if metadata.is_dir() {
+                    pending.push(path);
+                }
+            }
+        }
+
+        Ok(true)
     }
 
     /// Plan how to resolve a conflict at `target_path` according to the conflict strategy
@@ -504,13 +544,13 @@ impl Stower {
                 // Replace the other package's link, its files stay untouched
                 logger::verbose(&format!(
                     "Overriding: {} (stowed by another package)",
-                    target_dir.join(&new_entry.name).display()
+                    target_dir.join(&new_entry.target_name).display()
                 ));
                 replaced_names.insert(new_entry.key.as_str());
                 new_links.push(new_entry);
             } else {
                 // Keep planning to report every conflict, the plan will not be executed
-                plan.add_conflict(target_dir.join(&new_entry.name));
+                plan.add_conflict(target_dir.join(&new_entry.target_name));
             }
         }
 
@@ -528,7 +568,7 @@ impl Stower {
             self.plan_stow_unfolded(
                 &original_entry.path,
                 &new_entry.path,
-                &target_dir.join(&new_entry.name),
+                &target_dir.join(&new_entry.target_name),
                 &nested_base,
                 plan,
             )?;
@@ -554,9 +594,9 @@ impl Stower {
         let mut relative_path: PathBuf = std::iter::repeat_n("..", link_base.depth).collect();
         relative_path.push(base_to_source);
 
-        let link_path = target_dir.join(&entry.name);
+        let link_path = target_dir.join(&entry.target_name);
 
-        if entry.is_dir && self.no_folding {
+        if entry.is_dir && !self.can_fold(&entry.path)? {
             plan.add(planner::Action::CreateDir {
                 path: link_path.clone(),
             });
@@ -604,10 +644,15 @@ impl Stower {
                 .metadata()
                 .map_err(|e| StowError::io_error(path.clone(), e))?;
             let name = entry.file_name();
+            let target_name = if self.dotfiles {
+                path_utils::dotfiles_name(&name)
+            } else {
+                name
+            };
 
             result.push(PackageEntry {
-                key: name.to_string_lossy().to_lowercase(),
-                name,
+                key: target_name.to_string_lossy().to_lowercase(),
+                target_name,
                 path,
                 is_dir: metadata.is_dir(),
             });
@@ -621,7 +666,7 @@ impl Stower {
 struct PackageEntry {
     /// Name for case-insensitive comparison, as Windows does
     key: String,
-    name: OsString,
+    target_name: OsString,
     path: PathBuf,
     is_dir: bool,
 }

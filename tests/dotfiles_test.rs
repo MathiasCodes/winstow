@@ -1,0 +1,126 @@
+mod common;
+
+use common::{Sandbox, assert_success, is_symlink};
+use std::fs;
+
+#[test]
+fn dotfiles_stow_restow_and_unstow_use_translated_names() {
+    let sandbox = Sandbox::new();
+    sandbox.package_file("pkg", "dot-bashrc", "bash");
+    sandbox.package_file("pkg", "dot-config/init", "config");
+
+    assert_success(&sandbox.winstow(&["--dotfiles", "pkg"]));
+    assert!(is_symlink(&sandbox.target(".bashrc")));
+    assert!(is_symlink(&sandbox.target(".config")));
+    assert!(!sandbox.target("dot-bashrc").exists());
+
+    assert_success(&sandbox.winstow(&["--dotfiles", "-R", "pkg"]));
+    assert_eq!(
+        fs::read_to_string(sandbox.target(".config/init")).unwrap(),
+        "config"
+    );
+
+    assert_success(&sandbox.winstow(&["--dotfiles", "-D", "pkg"]));
+    assert!(!sandbox.target(".bashrc").exists());
+    assert!(!sandbox.target(".config").exists());
+    assert!(sandbox.stow_dir().join("pkg/dot-bashrc").exists());
+}
+
+#[test]
+fn dotfiles_unfolding_matches_translated_directory_names() {
+    let sandbox = Sandbox::new();
+    sandbox.package_file("pkgA", ".config/a.txt", "a");
+    sandbox.package_file("pkgB", "dot-config/dot-b.txt", "b");
+
+    assert_success(&sandbox.winstow(&["--dotfiles", "pkgA"]));
+    assert!(is_symlink(&sandbox.target(".config")));
+    assert_success(&sandbox.winstow(&["--dotfiles", "pkgB"]));
+
+    assert!(!is_symlink(&sandbox.target(".config")));
+    assert!(is_symlink(&sandbox.target(".config/a.txt")));
+    assert!(is_symlink(&sandbox.target(".config/.b.txt")));
+    assert_eq!(
+        fs::read_to_string(sandbox.target(".config/.b.txt")).unwrap(),
+        "b"
+    );
+    assert!(!sandbox.target(".config/dot-b.txt").exists());
+}
+
+#[test]
+fn dotfiles_unfolding_translates_nested_names() {
+    let sandbox = Sandbox::new();
+    sandbox.package_file("pkgA", ".config/nvim/a.txt", "a");
+    sandbox.package_file("pkgB", "dot-config/nvim/dot-b.txt", "b");
+
+    assert_success(&sandbox.winstow(&["--dotfiles", "pkgA"]));
+    assert_success(&sandbox.winstow(&["--dotfiles", "pkgB"]));
+
+    assert!(!is_symlink(&sandbox.target(".config")));
+    assert!(!is_symlink(&sandbox.target(".config/nvim")));
+    assert!(is_symlink(&sandbox.target(".config/nvim/a.txt")));
+    assert!(is_symlink(&sandbox.target(".config/nvim/.b.txt")));
+}
+
+#[test]
+fn dotfiles_directory_with_translated_descendant_is_not_folded() {
+    let sandbox = Sandbox::new();
+    sandbox.package_file("pkg", "config/nvim/dot-init", "init");
+
+    assert_success(&sandbox.winstow(&["--dotfiles", "pkg"]));
+
+    assert!(!is_symlink(&sandbox.target("config")));
+    assert!(!is_symlink(&sandbox.target("config/nvim")));
+    assert!(is_symlink(&sandbox.target("config/nvim/.init")));
+    assert!(!sandbox.target("config/nvim/dot-init").exists());
+}
+
+#[test]
+fn ignored_descendant_stays_hidden_after_stow_and_refold() {
+    let sandbox = Sandbox::new();
+    sandbox.package_file("pkgA", "config/visible", "a");
+    sandbox.package_file("pkgA", "config/dot-secret", "secret");
+    sandbox.package_file("pkgB", "config/other", "b");
+
+    assert_success(&sandbox.winstow(&["--dotfiles", "--ignore", "dot-secret", "pkgA"]));
+    assert!(!is_symlink(&sandbox.target("config")));
+    assert!(!sandbox.target("config/.secret").exists());
+    assert!(!sandbox.target("config/dot-secret").exists());
+
+    assert_success(&sandbox.winstow(&["--dotfiles", "pkgB"]));
+    assert_success(&sandbox.winstow(&["--dotfiles", "-D", "pkgB"]));
+    assert!(!is_symlink(&sandbox.target("config")));
+    assert!(is_symlink(&sandbox.target("config/visible")));
+    assert!(!sandbox.target("config/dot-secret").exists());
+}
+
+#[test]
+fn translated_child_prevents_refolding() {
+    let sandbox = Sandbox::new();
+    sandbox.package_file("pkgA", "config/dot-hidden", "a");
+    sandbox.package_file("pkgB", "config/other", "b");
+
+    assert_success(&sandbox.winstow(&["--dotfiles", "pkgA"]));
+    assert_success(&sandbox.winstow(&["--dotfiles", "pkgB"]));
+    assert_success(&sandbox.winstow(&["--dotfiles", "-D", "pkgB"]));
+
+    assert!(!is_symlink(&sandbox.target("config")));
+    assert!(is_symlink(&sandbox.target("config/.hidden")));
+}
+
+#[test]
+fn translated_directory_can_refold_when_children_need_no_translation() {
+    let sandbox = Sandbox::new();
+    sandbox.package_file("pkgA", "dot-config/a.txt", "a");
+    sandbox.package_file("pkgB", ".config/b.txt", "b");
+
+    assert_success(&sandbox.winstow(&["--dotfiles", "pkgA"]));
+    assert_success(&sandbox.winstow(&["--dotfiles", "pkgB"]));
+    assert_success(&sandbox.winstow(&["--dotfiles", "-D", "pkgB"]));
+
+    assert!(is_symlink(&sandbox.target(".config")));
+    assert_eq!(
+        fs::read_to_string(sandbox.target(".config/a.txt")).unwrap(),
+        "a"
+    );
+    assert!(!sandbox.target(".config/b.txt").exists());
+}
