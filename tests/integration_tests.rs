@@ -4,18 +4,18 @@
 
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 // Helper to create a test package structure
-fn create_test_package(stow_dir: &PathBuf, package_name: &str) -> PathBuf {
+fn create_test_package(stow_dir: &Path, package_name: &str) -> PathBuf {
     let package_dir = stow_dir.join(package_name);
     fs::create_dir_all(&package_dir).unwrap();
     package_dir
 }
 
 // Helper to create a file with content
-fn create_file_with_content(path: &PathBuf, content: &str) {
+fn create_file_with_content(path: &Path, content: &str) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap();
     }
@@ -150,51 +150,6 @@ fn test_empty_directory_pruning() {
     // TODO: Stow the package
     // TODO: Unstow the package
     // TODO: Verify all empty directories were pruned
-}
-
-#[test]
-fn test_directory_folding() {
-    let temp = TempDir::new().unwrap();
-    let stow_dir = temp.path().join("stow");
-    let target_dir = temp.path().join("target");
-    fs::create_dir(&stow_dir).unwrap();
-    fs::create_dir(&target_dir).unwrap();
-
-    // Create a package with a directory that should be folded
-    let package = create_test_package(&stow_dir, "mypackage");
-    fs::create_dir(package.join("mydir")).unwrap();
-    create_file_with_content(&package.join("mydir/file1.txt"), "content1");
-    create_file_with_content(&package.join("mydir/file2.txt"), "content2");
-
-    assert!(package.join("mydir").exists());
-
-    // TODO: Stow the package
-    // TODO: Verify the entire directory was folded (single symlink, not individual files)
-}
-
-#[test]
-fn test_directory_unfolding() {
-    let temp = TempDir::new().unwrap();
-    let stow_dir = temp.path().join("stow");
-    let target_dir = temp.path().join("target");
-    fs::create_dir(&stow_dir).unwrap();
-    fs::create_dir(&target_dir).unwrap();
-
-    // Create two packages that will cause unfolding
-    let pkg1 = create_test_package(&stow_dir, "package1");
-    fs::create_dir(pkg1.join("shared")).unwrap();
-    create_file_with_content(&pkg1.join("shared/file1.txt"), "pkg1");
-
-    let pkg2 = create_test_package(&stow_dir, "package2");
-    fs::create_dir(pkg2.join("shared")).unwrap();
-    create_file_with_content(&pkg2.join("shared/file2.txt"), "pkg2");
-
-    assert!(pkg1.join("shared/file1.txt").exists());
-    assert!(pkg2.join("shared/file2.txt").exists());
-
-    // TODO: Stow package1 (should fold)
-    // TODO: Stow package2 (should unfold, then link both files)
-    // TODO: Verify both files are linked in target/shared/
 }
 
 #[test]

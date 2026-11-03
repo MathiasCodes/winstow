@@ -1,5 +1,7 @@
 use crate::error::{Result, StowError};
 use crate::{fs_ops, logger, path_utils, planner};
+use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -62,16 +64,20 @@ impl Unstower {
     }
 
     /// Recursively plan unstowing a directory
+    /// Returns whether `target_dir` itself is planned for removal
     fn plan_unstow_directory(
         &self,
         package_dir: &Path,
         target_dir: &Path,
         plan: &mut planner::Plan,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         // If target doesn't exist, nothing to unstow
         if !target_dir.exists() {
-            return Ok(());
+            return Ok(false);
         }
+
+        // Names of target entries that are planned for removal
+        let mut removed_names = HashSet::new();
 
         // Read the package directory to know what to look for
         let entries = fs::read_dir(package_dir)
@@ -92,32 +98,53 @@ impl Unstower {
                 .metadata()
                 .map_err(|e| StowError::io_error(package_item.clone(), e))?;
 
-            if metadata.is_dir() {
-                self.plan_unstow_dir_item(&package_item, &target_item, plan)?;
+            let removed = if metadata.is_dir() {
+                self.plan_unstow_dir_item(&package_item, &target_item, plan)?
             } else {
-                self.plan_unstow_file(&package_item, &target_item, plan)?;
+                self.plan_unstow_file(&package_item, &target_item, plan)?
+            };
+
+            if removed {
+                removed_names.insert(name_key(&name));
             }
         }
 
-        // After removing items, check if target_dir is empty and should be pruned
-        // We'll do this after all removals
-        if *target_dir != self.target_dir {
-            // Don't try to remove the root target directory
+        // Don't try to remove the root target directory
+        if *target_dir == self.target_dir {
+            return Ok(false);
+        }
+
+        // Prune target_dir only if nothing but planned removals is left in it,
+        // e.g. keep AppData\Roaming\yazi when it still contains yazi's state
+        let mut remaining = fs::read_dir(target_dir)
+            .map_err(|e| StowError::io_error(target_dir.to_path_buf(), e))?;
+        let will_be_empty = remaining.all(|entry| match entry {
+            Ok(entry) => removed_names.contains(&name_key(&entry.file_name())),
+            Err(_) => false,
+        });
+
+        if will_be_empty {
             plan.add(planner::Action::RemoveEmptyDir {
                 path: target_dir.to_path_buf(),
             });
+        } else {
+            logger::verbose(&format!(
+                "Keeping non-empty directory: {}",
+                target_dir.display()
+            ));
         }
 
-        Ok(())
+        Ok(will_be_empty)
     }
 
     /// Plan unstowing a file
+    /// Returns whether the target link is planned for removal
     fn plan_unstow_file(
         &self,
         package_file: &Path,
         target_file: &Path,
         plan: &mut planner::Plan,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         // Check if target is a symlink
         if !fs_ops::is_symlink(target_file) {
             // Not a symlink, might be a conflict or already removed
@@ -125,83 +152,84 @@ impl Unstower {
                 "Target is not a symlink, skipping: {}",
                 target_file.display()
             ));
-            return Ok(());
+            return Ok(false);
         }
 
-        // Read the symlink target
-        let link_target = fs_ops::read_symlink(target_file)?;
-        let link_target_abs = if link_target.is_relative() {
-            target_file
-                .parent()
-                .unwrap_or(target_file)
-                .join(&link_target)
-        } else {
-            link_target.clone()
-        };
-
-        // Normalize both paths for comparison
-        let link_target_norm = path_utils::normalize_path(&link_target_abs)?;
-        let package_file_norm = path_utils::normalize_path(package_file)?;
-
-        // Check if the symlink points to our package
-        if path_utils::paths_equal(&link_target_norm, &package_file_norm) {
-            // This symlink is from our package, remove it
-            plan.add(planner::Action::RemoveLink {
-                path: target_file.to_path_buf(),
-            });
-        } else {
+        if !self.link_points_to(target_file, package_file)? {
             logger::verbose(&format!(
                 "Symlink points elsewhere, skipping: {}",
                 target_file.display()
             ));
+            return Ok(false);
         }
 
-        Ok(())
+        // This symlink is from our package, remove it
+        plan.add(planner::Action::RemoveLink {
+            path: target_file.to_path_buf(),
+        });
+
+        Ok(true)
     }
 
     /// Plan unstowing a directory
+    /// Returns whether the target directory or link is planned for removal
     fn plan_unstow_dir_item(
         &self,
         package_dir: &Path,
         target_dir: &Path,
         plan: &mut planner::Plan,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         // Check if target is a symlink
         if fs_ops::is_symlink(target_dir) {
-            // Check if it points to our package directory
-            let link_target = fs_ops::read_symlink(target_dir)?;
-            let link_target_abs = if link_target.is_relative() {
-                target_dir.parent().unwrap_or(target_dir).join(&link_target)
-            } else {
-                link_target.clone()
-            };
-
-            let link_target_norm = path_utils::normalize_path(&link_target_abs)?;
-            let package_dir_norm = path_utils::normalize_path(package_dir)?;
-
-            if path_utils::paths_equal(&link_target_norm, &package_dir_norm) {
-                // This directory symlink is from our package, remove it
-                plan.add(planner::Action::RemoveLink {
-                    path: target_dir.to_path_buf(),
-                });
-            } else {
+            if !self.link_points_to(target_dir, package_dir)? {
                 logger::verbose(&format!(
                     "Directory symlink points elsewhere, skipping: {}",
                     target_dir.display()
                 ));
+                return Ok(false);
             }
-        } else if target_dir.is_dir() {
-            // It's a real directory, recurse into it
-            self.plan_unstow_directory(package_dir, target_dir, plan)?;
-        } else {
-            logger::verbose(&format!(
-                "Target is not a directory or symlink, skipping: {}",
-                target_dir.display()
-            ));
+
+            // This directory symlink is from our package, remove it
+            plan.add(planner::Action::RemoveLink {
+                path: target_dir.to_path_buf(),
+            });
+            return Ok(true);
         }
 
-        Ok(())
+        if target_dir.is_dir() {
+            // It's a real directory, recurse into it
+            return self.plan_unstow_directory(package_dir, target_dir, plan);
+        }
+
+        logger::verbose(&format!(
+            "Target is not a directory or symlink, skipping: {}",
+            target_dir.display()
+        ));
+
+        Ok(false)
     }
+
+    /// Check whether the symlink at `link_path` points to `package_path`
+    fn link_points_to(&self, link_path: &Path, package_path: &Path) -> Result<bool> {
+        let link_target = fs_ops::read_symlink(link_path)?;
+        let link_target_abs = if link_target.is_relative() {
+            link_path.parent().unwrap_or(link_path).join(&link_target)
+        } else {
+            link_target
+        };
+
+        // Normalize both paths for comparison
+        let link_target_norm = path_utils::normalize_path(&link_target_abs)?;
+        let package_path_norm = path_utils::normalize_path(package_path)?;
+
+        let points_to = path_utils::paths_equal(&link_target_norm, &package_path_norm);
+        Ok(points_to)
+    }
+}
+
+/// Key for comparing file names case-insensitively, as Windows does
+fn name_key(name: &OsStr) -> String {
+    name.to_string_lossy().to_lowercase()
 }
 
 #[cfg(test)]

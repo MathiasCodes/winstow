@@ -104,8 +104,7 @@ fn execute_action(action: &Action, dry_run: bool) -> Result<()> {
 
             if !dry_run {
                 // Remove the symlink
-                std::fs::remove_file(link_path)
-                    .map_err(|e| StowError::io_error(link_path.clone(), e))?;
+                fs_ops::remove_symlink(link_path)?;
 
                 // Create a real directory
                 std::fs::create_dir(link_path)
@@ -120,7 +119,7 @@ fn execute_action(action: &Action, dry_run: bool) -> Result<()> {
             logger::action(&format!("Remove link: {}", path.display()));
 
             if !dry_run {
-                std::fs::remove_file(path).map_err(|e| StowError::io_error(path.clone(), e))?;
+                fs_ops::remove_symlink(path)?;
             }
         }
 

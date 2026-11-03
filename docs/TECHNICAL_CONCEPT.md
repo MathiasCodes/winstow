@@ -51,22 +51,26 @@ The `stow` command creates symbolic links from package directories to the target
 **Folding** is the optimization where an entire directory is linked as a single symlink instead of linking each child individually. This reduces the number of symlinks and improves performance.
 
 **Folding Rules** (aligned with GNU Stow):
-- A directory can be folded (linked as a single symlink) if:
-  - The target path does not exist, OR
-  - The target path is already a symlink pointing to the same package's directory
-- A directory must be unfolded (replaced with a real directory containing child links) if:
-  - The target path exists and is a symlink pointing to a different package's directory
-  - The target path exists and is a regular file or directory (conflict)
+- A directory is folded (linked as a single symlink) only if the target path does not exist.
+- An existing real directory is never replaced by a symlink, not even an empty one; winstow descends into it and links the children individually.
+- A directory must be unfolded (replaced with a real directory containing child links) if the target path is a symlink pointing to another package's directory inside the stow directory.
+- A symlink pointing outside the stow directory or to a non-directory is a **conflict**; winstow never removes links it does not own.
 
 **Folding Algorithm**:
 1. For each directory in the package tree:
-   - Check if the target path exists
-   - If it exists and is a symlink to another package → **unfold** the existing link first
-   - If it exists and is a non-link → **conflict** (fail or report)
-   - If it does not exist → **fold** (create directory symlink)
-   - If it exists and is a symlink to the same package → **fold** (no-op or verify)
+   - If the target path does not exist → **fold** (create directory symlink)
+   - If it is a symlink to the same package directory → **no-op**
+   - If it is a symlink to another package directory in the stow directory → **unfold** the existing link
+   - If it is any other symlink → **conflict**
+   - If it is a real directory → **traverse** into it
+   - If it is a file → **conflict**
 
-2. After unfolding, create individual symlinks for all children of the unfolded directory.
+2. After unfolding, create individual symlinks for the children of both packages in the new real directory.
+   Planning uses the two package listings, not the filesystem below the old link (which still shows the other package's files):
+   - Names only one package provides are linked directly (directories folded).
+   - Directories both packages provide are unfolded recursively.
+   - Files present in both are a conflict; `--defer` keeps the existing link, `--override` replaces it.
+     The other package's files are never touched.
 
 #### File Linking
 
@@ -122,9 +126,9 @@ The `unstow` command removes symbolic links created by `stow` and prunes empty d
 1. After removing all symlinks for a package:
    - Traverse the target directory tree from leaves to root.
    - For each directory:
-     - If the directory is empty → remove it
-     - If the directory contains only empty subdirectories → remove recursively
-     - Stop at directories that contain non-empty content or symlinks from other packages
+     - If everything left in it is planned for removal → remove it
+     - Otherwise keep it silently (e.g. `AppData\Roaming\yazi` still containing yazi's `state` directory)
+   - The root target directory is never removed.
 
 2. **Pruning Rules**:
    - Only prune directories that were created by winstow (or are now empty after link removal).

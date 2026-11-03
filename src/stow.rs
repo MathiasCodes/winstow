@@ -1,5 +1,7 @@
 use crate::error::{Result, StowError};
 use crate::{adopt, fs_ops, ignore, logger, path_utils, planner};
+use std::collections::HashSet;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -28,6 +30,8 @@ pub struct Stower {
 enum FoldDecision {
     /// Create a single directory symlink (fold)
     Fold,
+    /// Target is already a symlink to this directory (no-op)
+    AlreadyLinked,
     /// Remove existing symlink and traverse into directory (unfold)
     Unfold(PathBuf), // Contains the original target
     /// Traverse into directory and link children (already a real directory)
@@ -267,6 +271,10 @@ impl Stower {
                 });
             }
 
+            FoldDecision::AlreadyLinked => {
+                logger::verbose(&format!("Already linked: {}", target_path.display()));
+            }
+
             FoldDecision::Unfold(original_target) => {
                 // Unfold the existing symlink
                 plan.add(planner::Action::UnfoldDirLink {
@@ -276,7 +284,17 @@ impl Stower {
 
                 // After unfolding, we need to link the original target's contents
                 // and the new source's contents into the now-real directory
-                self.plan_stow_unfolded(&original_target, source_path, target_path, plan)?;
+                let link_base = LinkBase {
+                    dir: path_utils::normalize_path(target_path.parent().unwrap_or(target_path))?,
+                    depth: 1,
+                };
+                self.plan_stow_unfolded(
+                    &original_target,
+                    source_path,
+                    target_path,
+                    &link_base,
+                    plan,
+                )?;
             }
 
             FoldDecision::Traverse => {
@@ -355,12 +373,20 @@ impl Stower {
             let source_norm = path_utils::normalize_path(source_path)?;
 
             if path_utils::paths_equal(&link_target_norm, &source_norm) {
-                // Already linked to the same place, fold (no-op)
-                return Ok(FoldDecision::Fold);
-            } else {
-                // Linked to a different place, need to unfold
-                return Ok(FoldDecision::Unfold(link_target_abs));
+                // Already linked to the same place
+                return Ok(FoldDecision::AlreadyLinked);
             }
+
+            // Only unfold links that stow owns and that point to a directory,
+            // anything else is a link the user created
+            if !link_target_norm.is_dir()
+                || !path_utils::is_within(&link_target_norm, &self.stow_dir)
+            {
+                return Err(StowError::conflict(target_path));
+            }
+
+            // Linked to a different package, need to unfold
+            return Ok(FoldDecision::Unfold(link_target_norm));
         }
 
         // Check if target is a directory
@@ -374,24 +400,156 @@ impl Stower {
     }
 
     /// Plan stowing after unfolding
-    /// Links contents of both the original target and the new source into the target directory
+    /// Links contents of both the original target and the new source into the target directory.
+    /// At planning time `target_dir` is still the old link, so looking at the filesystem
+    /// below it would show the original package's files; the two listings are merged instead.
     fn plan_stow_unfolded(
         &self,
         original_target: &Path,
         new_source: &Path,
         target_dir: &Path,
+        link_base: &LinkBase,
         plan: &mut planner::Plan,
     ) -> Result<()> {
-        // First, link all contents from the original target
-        if original_target.exists() && original_target.is_dir() {
-            self.plan_stow_directory(original_target, target_dir, plan)?;
+        let original_entries = self.list_entries(original_target)?;
+        let new_entries = self.list_entries(new_source)?;
+
+        let mut replaced_names = HashSet::new();
+        let mut merged_dirs = Vec::new();
+        let mut new_links = Vec::new();
+
+        for new_entry in &new_entries {
+            let Some(original_entry) = original_entries.iter().find(|o| o.key == new_entry.key)
+            else {
+                new_links.push(new_entry);
+                continue;
+            };
+
+            if self.patterns.should_defer(&new_entry.path) {
+                logger::verbose(&format!(
+                    "Deferring: {} (already stowed)",
+                    new_entry.path.display()
+                ));
+            } else if original_entry.is_dir && new_entry.is_dir {
+                // Both packages provide this directory, unfold it as well
+                replaced_names.insert(new_entry.key.as_str());
+                merged_dirs.push((original_entry, new_entry));
+            } else if self.conflict_strategy == ConflictStrategy::Override {
+                // Replace the other package's link, its files stay untouched
+                logger::verbose(&format!(
+                    "Overriding: {} (stowed by another package)",
+                    target_dir.join(&new_entry.name).display()
+                ));
+                replaced_names.insert(new_entry.key.as_str());
+                new_links.push(new_entry);
+            } else {
+                return Err(StowError::conflict(target_dir.join(&new_entry.name)));
+            }
         }
 
-        // Then, link all contents from the new source
-        self.plan_stow_directory(new_source, target_dir, plan)?;
+        for original_entry in &original_entries {
+            if !replaced_names.contains(original_entry.key.as_str()) {
+                self.plan_unfolded_link(original_entry, target_dir, link_base, plan)?;
+            }
+        }
+
+        for (original_entry, new_entry) in merged_dirs {
+            let nested_base = LinkBase {
+                dir: link_base.dir.clone(),
+                depth: link_base.depth + 1,
+            };
+            self.plan_stow_unfolded(
+                &original_entry.path,
+                &new_entry.path,
+                &target_dir.join(&new_entry.name),
+                &nested_base,
+                plan,
+            )?;
+        }
+
+        for new_entry in new_links {
+            self.plan_unfolded_link(new_entry, target_dir, link_base, plan)?;
+        }
 
         Ok(())
     }
+
+    /// Plan a link inside a directory that is being unfolded
+    fn plan_unfolded_link(
+        &self,
+        entry: &PackageEntry,
+        target_dir: &Path,
+        link_base: &LinkBase,
+        plan: &mut planner::Plan,
+    ) -> Result<()> {
+        let source_norm = path_utils::normalize_path(&entry.path)?;
+        let base_to_source = path_utils::compute_relative_path(&link_base.dir, &source_norm)?;
+        let mut relative_path: PathBuf = std::iter::repeat_n("..", link_base.depth).collect();
+        relative_path.push(base_to_source);
+
+        let link_path = target_dir.join(&entry.name);
+        let action = if entry.is_dir {
+            planner::Action::CreateDirLink {
+                link_path,
+                target_path: relative_path,
+            }
+        } else {
+            planner::Action::CreateFileLink {
+                link_path,
+                target_path: relative_path,
+            }
+        };
+        plan.add(action);
+
+        Ok(())
+    }
+
+    /// List the entries of a package directory that are not ignored
+    fn list_entries(&self, dir: &Path) -> Result<Vec<PackageEntry>> {
+        let entries = fs::read_dir(dir).map_err(|e| StowError::io_error(dir.to_path_buf(), e))?;
+
+        let mut result = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| StowError::io_error(dir.to_owned(), e))?;
+            let path = entry.path();
+
+            if self.patterns.should_ignore(&path) {
+                logger::verbose(&format!("Ignoring: {}", path.display()));
+                continue;
+            }
+
+            let metadata = entry
+                .metadata()
+                .map_err(|e| StowError::io_error(path.clone(), e))?;
+            let name = entry.file_name();
+
+            result.push(PackageEntry {
+                key: name.to_string_lossy().to_lowercase(),
+                name,
+                path,
+                is_dir: metadata.is_dir(),
+            });
+        }
+
+        Ok(result)
+    }
+}
+
+/// An entry of a package directory
+struct PackageEntry {
+    /// Name for case-insensitive comparison, as Windows does
+    key: String,
+    name: OsString,
+    path: PathBuf,
+    is_dir: bool,
+}
+
+/// Real directory from which links inside an unfolded directory are computed
+/// Paths below an unfolded link cannot be canonicalised, since that would
+/// resolve the old link; `depth` counts the levels between `dir` and the link's parent
+struct LinkBase {
+    dir: PathBuf,
+    depth: usize,
 }
 
 #[cfg(test)]

@@ -67,6 +67,24 @@ pub fn compute_relative_path(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Re
     Ok(relative)
 }
 
+/// Check if `path` is `base` or located below it, using case-insensitive comparison on Windows
+pub fn is_within(path: impl AsRef<Path>, base: impl AsRef<Path>) -> bool {
+    let path = path.as_ref();
+    let base = base.as_ref();
+
+    let path_norm = normalize_path(path).unwrap_or_else(|_| path.to_owned());
+    let base_norm = normalize_path(base).unwrap_or_else(|_| base.to_owned());
+
+    let path_components: Vec<_> = path_norm.components().collect();
+    let base_components: Vec<_> = base_norm.components().collect();
+
+    base_components.len() <= path_components.len()
+        && base_components
+            .iter()
+            .zip(path_components.iter())
+            .all(|(a, b)| components_equal(a, b))
+}
+
 /// Compare two path components with case-insensitivity on Windows
 #[inline]
 fn components_equal(a: &Component, b: &Component) -> bool {
@@ -201,6 +219,24 @@ mod tests {
         let from = PathBuf::from("relative/path");
         let to = PathBuf::from("/absolute/path");
         assert!(compute_relative_path(&from, &to).is_err());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn is_within_path_below_base_returns_true() {
+        let base = PathBuf::from("C:\\Stow");
+        let path = PathBuf::from("C:\\stow\\pkg\\dir");
+
+        assert!(is_within(&path, &base));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn is_within_sibling_with_common_prefix_returns_false() {
+        let base = PathBuf::from("C:\\stow");
+        let path = PathBuf::from("C:\\stow2\\pkg");
+
+        assert!(!is_within(&path, &base));
     }
 
     #[test]

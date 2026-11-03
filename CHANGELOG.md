@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Stowing a package whose directory is already folded no longer fails with `WIN32_ERROR(183)`
+- Unstowing and restowing folded directories no longer fails with "access denied"; directory symlinks are now removed with `remove_dir`
+- Unstowing no longer fails with "Directory is not empty" when a parent directory contains other files; such directories are kept
+- Unfolding a directory linked by another package now links both packages' contents instead of reporting a conflict
+- `--override` no longer deletes files of another package through a folded directory link while unfolding
+
+### Changed
+- Directory symlinks pointing outside the stow directory are reported as conflicts instead of being unfolded
+
 ## [v0.3.0] - 2025-01-13
 
 ### Changed

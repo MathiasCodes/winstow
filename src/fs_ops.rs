@@ -75,6 +75,26 @@ pub fn is_symlink(path: impl AsRef<Path>) -> bool {
     }
 }
 
+/// Remove a symbolic link without touching its target
+/// Directory symlinks must be removed with `remove_dir` on Windows;
+/// `remove_file` fails on them with "access denied"
+pub fn remove_symlink(path: impl AsRef<Path>) -> Result<()> {
+    use std::os::windows::fs::FileTypeExt;
+
+    let path = path.as_ref();
+    let metadata = path
+        .symlink_metadata()
+        .map_err(|e| StowError::io_error(path.to_owned(), e))?;
+
+    let result = if metadata.file_type().is_symlink_dir() {
+        fs::remove_dir(path)
+    } else {
+        fs::remove_file(path)
+    };
+
+    result.map_err(|e| StowError::io_error(path.to_owned(), e))
+}
+
 /// Check if a path is a directory (not a file or symlink to file)
 #[inline]
 pub fn is_directory(path: impl AsRef<Path>) -> Result<bool> {
@@ -333,5 +353,34 @@ mod tests {
         // Nonexistent path should return error
         let result = is_directory(&nonexistent);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn remove_symlink_directory_link_removes_link_and_keeps_target() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join("target");
+        fs::create_dir(&target).unwrap();
+        File::create(target.join("file.txt")).unwrap();
+        let link = temp_dir.path().join("link");
+        create_symlink(&link, "target", true).unwrap();
+
+        remove_symlink(&link).unwrap();
+
+        assert!(link.symlink_metadata().is_err());
+        assert!(target.join("file.txt").exists());
+    }
+
+    #[test]
+    fn remove_symlink_file_link_removes_link_and_keeps_target() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join("target.txt");
+        File::create(&target).unwrap();
+        let link = temp_dir.path().join("link.txt");
+        create_symlink(&link, "target.txt", false).unwrap();
+
+        remove_symlink(&link).unwrap();
+
+        assert!(link.symlink_metadata().is_err());
+        assert!(target.exists());
     }
 }
