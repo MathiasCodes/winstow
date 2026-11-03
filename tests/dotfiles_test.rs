@@ -162,3 +162,21 @@ fn translated_name_collision_during_unfolding_keeps_original_link() {
     );
     assert!(!sandbox.target("config/.same").exists());
 }
+
+#[test]
+fn restowing_already_folded_package_applies_dotfiles_to_children() {
+    let sandbox = Sandbox::new();
+    sandbox.package_file("pkg", "config/dot-init", "init");
+
+    assert_success(&sandbox.winstow(&["pkg"]));
+    assert!(is_symlink(&sandbox.target("config")));
+    assert!(sandbox.target("config/dot-init").exists());
+
+    assert_success(&sandbox.winstow(&["--dotfiles", "pkg"]));
+    assert!(!is_symlink(&sandbox.target("config")));
+    assert!(is_symlink(&sandbox.target("config/.init")));
+    assert!(!sandbox.target("config/dot-init").exists());
+
+    assert_success(&sandbox.winstow(&["--dotfiles", "-D", "pkg"]));
+    assert!(!sandbox.target("config").exists());
+}

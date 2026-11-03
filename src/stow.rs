@@ -270,7 +270,27 @@ impl Stower {
             }
 
             FoldDecision::AlreadyLinked => {
-                logger::verbose(&format!("Already linked: {}", target_path.display()));
+                if self.can_fold(source_path)? {
+                    logger::verbose(&format!("Already linked: {}", target_path.display()));
+                } else {
+                    // A folded link can predate --dotfiles, --ignore, or
+                    // --no-folding. Rebuild its visible entries under a real dir.
+                    plan.add(planner::Action::UnfoldDirLink {
+                        link_path: target_path.to_path_buf(),
+                        original_target: path_utils::normalize_path(source_path)?,
+                    });
+                    let link_base = LinkBase {
+                        dir: path_utils::normalize_path(
+                            target_path.parent().unwrap_or(target_path),
+                        )?,
+                        depth: 1,
+                    };
+                    let entries = self.list_entries(source_path)?;
+                    Self::record_entry_collisions(&entries, target_path, plan);
+                    for entry in entries {
+                        self.plan_unfolded_link(&entry, target_path, &link_base, plan)?;
+                    }
+                }
             }
 
             FoldDecision::Unfold(original_target) => {
@@ -371,10 +391,12 @@ impl Stower {
                     return Ok(false);
                 }
 
-                let metadata = entry
-                    .metadata()
+                // Do not descend into directory symlinks: the planner treats
+                // them as linkable entries too, even when they point upward.
+                let file_type = entry
+                    .file_type()
                     .map_err(|e| StowError::io_error(path.clone(), e))?;
-                if metadata.is_dir() {
+                if file_type.is_dir() {
                     pending.push(path);
                 }
             }

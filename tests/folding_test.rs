@@ -7,6 +7,18 @@ use common::{Sandbox, assert_success, exists_at_all, foreign_dir, is_symlink};
 use std::fs;
 
 #[test]
+fn directory_symlink_cycle_is_not_traversed() {
+    for args in [&["pkg"][..], &["--no-folding", "pkg"][..]] {
+        let sandbox = Sandbox::new();
+        sandbox.package_file("pkg", "config/file", "keep");
+        let source_dir = sandbox.stow_dir().join("pkg/config");
+        std::os::windows::fs::symlink_dir(&source_dir, source_dir.join("loop")).unwrap();
+
+        assert_success(&sandbox.winstow(args));
+        assert!(is_symlink(&sandbox.target("config/loop")));
+    }
+}
+#[test]
 fn stow_missing_target_dir_creates_single_dir_link() {
     let sandbox = Sandbox::new();
     sandbox.package_file("yazi", "AppData/yazi/config/yazi.toml", "pkg");
