@@ -42,6 +42,10 @@ pub struct Cli {
     #[arg(long = "override")]
     pub override_conflicts: bool,
 
+    /// Create real directories instead of directory symlinks, and never refold on unstow
+    #[arg(long = "no-folding")]
+    pub no_folding: bool,
+
     /// Skip files matching pattern (can be used multiple times)
     #[arg(long = "ignore", value_name = "PATTERN")]
     pub ignore: Vec<String>,
@@ -164,6 +168,14 @@ mod tests {
     fn test_adopt_with_delete_is_invalid() {
         let cli = Cli::try_parse_from(["winstow", "-D", "--adopt", "mypackage"]).unwrap();
         assert!(cli.validate_flags().is_err());
+    }
+
+    #[test]
+    fn no_folding_flag_is_parsed_and_valid_with_delete() {
+        let cli = Cli::try_parse_from(["winstow", "-D", "--no-folding", "mypackage"]).unwrap();
+
+        assert!(cli.no_folding);
+        assert!(cli.validate_flags().is_ok());
     }
 
     #[test]

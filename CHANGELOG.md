@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `--no-folding` option and `no-folding` configuration key to create real directories instead of directory symlinks
+
 ### Fixed
 - Stowing a package whose directory is already folded no longer fails with `WIN32_ERROR(183)`
 - Unstowing and restowing folded directories no longer fails with "access denied"; directory symlinks are now removed with `remove_dir`

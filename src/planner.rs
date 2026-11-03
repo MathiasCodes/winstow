@@ -21,6 +21,8 @@ pub enum Action {
         link_path: PathBuf,
         original_target: PathBuf,
     },
+    /// Create a real directory instead of a directory symlink (--no-folding)
+    CreateDir { path: PathBuf },
     /// Remove a symlink (file or directory)
     RemoveLink { path: PathBuf },
     /// Remove an empty directory
@@ -132,6 +134,14 @@ fn execute_action(action: &Action, dry_run: bool) -> Result<()> {
 
                 // Now we need to populate it with links to the original target's contents
                 // This is handled by the stow logic after unfolding
+            }
+        }
+
+        Action::CreateDir { path } => {
+            logger::action(&format!("Create directory: {}", path.display()));
+
+            if !dry_run {
+                std::fs::create_dir(path).map_err(|e| StowError::io_error(path.clone(), e))?;
             }
         }
 
@@ -256,6 +266,19 @@ mod tests {
         // Dry run should not fail
         let result = plan.execute(true);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn execute_create_dir_creates_real_directory() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let path = temp_dir.path().join("dir");
+        let mut plan = Plan::new();
+        plan.add(Action::CreateDir { path: path.clone() });
+
+        plan.execute(false).unwrap();
+
+        assert!(path.is_dir());
+        assert!(!fs_ops::is_symlink(&path));
     }
 
     #[test]

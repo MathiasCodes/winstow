@@ -72,6 +72,12 @@ The `stow` command creates symbolic links from package directories to the target
    - Files present in both are a conflict; `--defer` keeps the existing link, `--override` replaces it.
      The other package's files are never touched.
 
+**No Folding** (`--no-folding` or `no-folding = true` in the configuration file, aligned with GNU Stow):
+- Instead of a directory symlink, a real directory is created and its children are linked individually.
+- Existing directory symlinks of other packages are still unfolded when needed; their subdirectories are then created as real directories as well.
+- Directory symlinks already pointing to the package are kept.
+- Unstowing never refolds directories.
+
 #### File Linking
 
 - Files are always linked individually (no folding for files).
@@ -225,6 +231,7 @@ Only one action flag can be specified at a time.
 
 - `-v, --verbose` - Enable verbose output (show planned and executed actions)
 - `-n, --dry-run` - Perform a trial run without making changes (show what would be done)
+- `--no-folding` - Create real directories instead of directory symlinks, and never refold on unstow
 - `-h, --help` - Show help message and exit
 - `-V, --version` - Show version and exit
 

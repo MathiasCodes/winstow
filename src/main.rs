@@ -67,6 +67,7 @@ fn run(cli: Cli) -> Result<()> {
         cli.dry_run,
         cli.adopt,
         cli.override_conflicts,
+        cli.no_folding,
     )?;
 
     logger::verbose(&format!("Stow directory: {}", context.stow_dir().display()));
@@ -171,6 +172,7 @@ mod tests {
             dry_run: true, // Dry run
             adopt: false,
             override_conflicts: false,
+            no_folding: false,
             ignore: vec![],
             defer: vec![],
             packages: vec!["test".to_string()],
@@ -204,6 +206,7 @@ mod tests {
             dry_run: true, // Dry run
             adopt: false,
             override_conflicts: false,
+            no_folding: false,
             ignore: vec![],
             defer: vec![],
             packages: vec!["test".to_string()],
@@ -236,6 +239,7 @@ mod tests {
             dry_run: true, // Dry run
             adopt: false,
             override_conflicts: false,
+            no_folding: false,
             ignore: vec![],
             defer: vec![],
             packages: vec!["test".to_string()],

@@ -129,6 +129,7 @@ C:\Users\USER\
 | `-n` | `--dry-run` | Preview changes without applying them |
 | | `--adopt` | Move conflicting files into package (stow/restow only) |
 | | `--override` | Remove conflicting files and directories (stow/restow only, destructive) |
+| | `--no-folding` | Create real directories instead of directory symlinks, never refold on unstow |
 | | `--ignore PATTERN` | Skip files matching pattern (stow/restow only) |
 | | `--defer PATTERN` | Skip files matching pattern if they already exist in target (stow/restow only) |
 | `-h` | `--help` | Show help message |
@@ -299,6 +300,9 @@ defer = ["*.lock"]
 
 # Enable verbose mode by default
 verbose = false
+
+# Create real directories instead of directory symlinks
+no-folding = false
 ```
 
 CLI arguments always override config file settings.
@@ -328,6 +332,18 @@ C:\Users\USER\AppData\Local -> C:\Users\USER\Dotfiles\package1\AppData\Local
 C:\Users\USER\AppData\Local\
   ├── app1 -> C:\Users\USER\Dotfiles\package1\AppData\Local\app1
   └── app2 -> C:\Users\USER\Dotfiles\package2\AppData\Local\app2
+```
+
+### Disabling Folding
+
+With `--no-folding` (or `no-folding = true` in `.winstowrc`), winstow creates
+real directories and links only files. This is useful when applications write
+their own files into a configuration directory that should not end up in the
+package.
+
+```
+C:\Users\USER\AppData\Local\app\                 (real directory)
+  └── settings.json -> C:\Users\USER\Dotfiles\mypackage\AppData\Local\app\settings.json
 ```
 
 ## Best Practices

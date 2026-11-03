@@ -25,6 +25,10 @@ pub struct Config {
     /// Default verbose mode
     #[serde(default)]
     pub verbose: bool,
+
+    /// Never fold directories into directory symlinks
+    #[serde(default, rename = "no-folding")]
+    pub no_folding: bool,
 }
 
 impl Config {
@@ -87,6 +91,7 @@ impl Config {
         cli_dry_run: bool,
         cli_adopt: bool,
         cli_override_conflicts: bool,
+        cli_no_folding: bool,
     ) -> Result<StowContext> {
         // Get effective directories (use CLI, then config, then defaults)
         let stow_dir = cli_dir
@@ -117,8 +122,9 @@ impl Config {
         };
 
         let verbose = cli_verbose || self.verbose;
+        let no_folding = cli_no_folding || self.no_folding;
 
-        StowContext::new(
+        let context = StowContext::new(
             stow_dir,
             target_dir,
             ignore,
@@ -127,7 +133,9 @@ impl Config {
             cli_dry_run,
             cli_adopt,
             cli_override_conflicts,
-        )
+        )?;
+
+        Ok(context.with_no_folding(no_folding))
     }
 }
 
@@ -147,6 +155,8 @@ pub struct StowContext {
     dry_run: bool,
     /// Conflict resolution strategy
     conflict_strategy: crate::stow::ConflictStrategy,
+    /// Never fold directories into directory symlinks
+    no_folding: bool,
 }
 
 impl StowContext {
@@ -194,7 +204,22 @@ impl StowContext {
             defer,
             dry_run,
             conflict_strategy,
+            no_folding: false,
         })
+    }
+
+    /// Enable or disable folding of directories into directory symlinks
+    pub fn with_no_folding(mut self, no_folding: bool) -> Self {
+        if no_folding {
+            crate::logger::verbose("  --no-folding enabled: will create real directories");
+        }
+        self.no_folding = no_folding;
+        self
+    }
+
+    /// Check if folding of directories is disabled
+    pub fn is_no_folding(&self) -> bool {
+        self.no_folding
     }
 
     /// Get the stow directory
@@ -282,6 +307,7 @@ verbose = true
             ignore: vec!["*.config".to_string()],
             defer: vec!["*.config_defer".to_string()],
             verbose: false,
+            no_folding: false,
         };
 
         let merged = config
@@ -294,12 +320,14 @@ verbose = true
                 false, // dry_run
                 false, // adopt
                 false, // override_conflicts
+                true,  // no_folding
             )
             .unwrap();
 
         // CLI should take precedence
         assert_eq!(merged.stow_dir(), Path::new("C:\\cli_stow"));
         assert_eq!(merged.target_dir(), Path::new("C:\\cli_target"));
+        assert!(merged.is_no_folding());
     }
 
     #[test]
@@ -310,6 +338,7 @@ verbose = true
             ignore: vec!["*.config".to_string()],
             defer: vec!["*.config_defer".to_string()],
             verbose: true,
+            no_folding: true,
         };
 
         let merged = config
@@ -322,12 +351,25 @@ verbose = true
                 false, // dry_run
                 false, // adopt
                 false, // override_conflicts
+                false, // no_folding
             )
             .unwrap();
 
         // Should use config values
         assert_eq!(merged.stow_dir(), Path::new("C:\\config_stow"));
         assert_eq!(merged.target_dir(), Path::new("C:\\config_target"));
+        assert!(merged.is_no_folding());
+    }
+
+    #[test]
+    fn load_from_file_with_no_folding_enables_it() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join(".winstowrc");
+        fs::write(&config_path, "no-folding = true\n").unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+
+        assert!(config.no_folding);
     }
 
     #[test]

@@ -23,6 +23,7 @@ pub struct Stower {
     dry_run: bool,
     conflict_strategy: ConflictStrategy,
     patterns: ignore::PatternSet,
+    no_folding: bool,
 }
 
 /// Decision for how to handle a directory
@@ -52,6 +53,7 @@ impl Stower {
             dry_run: context.is_dry_run(),
             conflict_strategy: context.conflict_strategy(),
             patterns,
+            no_folding: context.is_no_folding(),
         }
     }
 
@@ -69,6 +71,7 @@ impl Stower {
             dry_run,
             conflict_strategy: ConflictStrategy::Fail,
             patterns: ignore::PatternSet::empty(),
+            no_folding: false,
         }
     }
 
@@ -241,19 +244,7 @@ impl Stower {
 
         match decision {
             FoldDecision::Fold => {
-                // Normalize source path once to avoid repeated syscalls
-                let source_norm = path_utils::normalize_path(source_path)?;
-
-                // Create a directory symlink
-                let target_parent = target_path.parent().unwrap_or(target_path);
-                let target_parent_abs = path_utils::normalize_path(target_parent)?;
-                let relative_path =
-                    path_utils::compute_relative_path(&target_parent_abs, &source_norm)?;
-
-                plan.add(planner::Action::CreateDirLink {
-                    link_path: target_path.to_owned(),
-                    target_path: relative_path,
-                });
+                self.plan_new_dir(source_path, target_path, plan)?;
             }
 
             FoldDecision::AlreadyLinked => {
@@ -290,19 +281,42 @@ impl Stower {
             FoldDecision::Conflict => {
                 // Target exists as a file or as a link stow cannot unfold
                 if self.plan_resolve_conflict(source_path, target_path, plan)? {
-                    let source_norm = path_utils::normalize_path(source_path)?;
-                    let target_parent = target_path.parent().unwrap_or(target_path);
-                    let target_parent_abs = path_utils::normalize_path(target_parent)?;
-                    let relative_path =
-                        path_utils::compute_relative_path(&target_parent_abs, &source_norm)?;
-
-                    plan.add(planner::Action::CreateDirLink {
-                        link_path: target_path.to_path_buf(),
-                        target_path: relative_path,
-                    });
+                    self.plan_new_dir(source_path, target_path, plan)?;
                 }
             }
         }
+
+        Ok(())
+    }
+
+    /// Plan a package directory at a target path that is free
+    /// Folds it into a directory symlink, or with --no-folding creates a real
+    /// directory and links the children individually
+    fn plan_new_dir(
+        &self,
+        source_path: &Path,
+        target_path: &Path,
+        plan: &mut planner::Plan,
+    ) -> Result<()> {
+        if self.no_folding {
+            plan.add(planner::Action::CreateDir {
+                path: target_path.to_path_buf(),
+            });
+            return self.plan_stow_directory(source_path, target_path, plan);
+        }
+
+        // Normalize source path once to avoid repeated syscalls
+        let source_norm = path_utils::normalize_path(source_path)?;
+
+        // Create a directory symlink
+        let target_parent = target_path.parent().unwrap_or(target_path);
+        let target_parent_abs = path_utils::normalize_path(target_parent)?;
+        let relative_path = path_utils::compute_relative_path(&target_parent_abs, &source_norm)?;
+
+        plan.add(planner::Action::CreateDirLink {
+            link_path: target_path.to_path_buf(),
+            target_path: relative_path,
+        });
 
         Ok(())
     }
@@ -524,6 +538,21 @@ impl Stower {
         relative_path.push(base_to_source);
 
         let link_path = target_dir.join(&entry.name);
+
+        if entry.is_dir && self.no_folding {
+            plan.add(planner::Action::CreateDir {
+                path: link_path.clone(),
+            });
+            let nested_base = LinkBase {
+                dir: link_base.dir.clone(),
+                depth: link_base.depth + 1,
+            };
+            for child in self.list_entries(&entry.path)? {
+                self.plan_unfolded_link(&child, &link_path, &nested_base, plan)?;
+            }
+            return Ok(());
+        }
+
         let action = if entry.is_dir {
             planner::Action::CreateDirLink {
                 link_path,
