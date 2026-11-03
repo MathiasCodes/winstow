@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `--no-folding` option and `no-folding` configuration key to create real directories instead of directory symlinks
+- Unstowing refolds directories that only contain links into a single package directory, as GNU Stow does
 
 ### Fixed
 - Stowing a package whose directory is already folded no longer fails with `WIN32_ERROR(183)`

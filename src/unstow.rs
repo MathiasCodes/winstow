@@ -1,6 +1,6 @@
 use crate::error::{Result, StowError};
 use crate::{fs_ops, logger, path_utils, planner};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,6 +10,18 @@ pub struct Unstower {
     stow_dir: PathBuf,
     target_dir: PathBuf,
     dry_run: bool,
+    no_folding: bool,
+}
+
+/// State of a target entry once the plan has been executed
+#[derive(Debug, PartialEq)]
+enum PlannedState {
+    /// The entry stays as it is
+    Kept,
+    /// The entry is removed
+    Removed,
+    /// The directory is replaced by a directory symlink to this package directory
+    Refolded(PathBuf),
 }
 
 impl Unstower {
@@ -19,6 +31,7 @@ impl Unstower {
             stow_dir: context.stow_dir().to_owned(),
             target_dir: context.target_dir().to_owned(),
             dry_run: context.is_dry_run(),
+            no_folding: context.is_no_folding(),
         }
     }
 
@@ -34,6 +47,7 @@ impl Unstower {
             stow_dir: stow_dir.into(),
             target_dir: target_dir.into(),
             dry_run,
+            no_folding: false,
         }
     }
 
@@ -64,20 +78,22 @@ impl Unstower {
     }
 
     /// Recursively plan unstowing a directory
-    /// Returns whether `target_dir` itself is planned for removal
+    /// Returns what happens to `target_dir` itself
     fn plan_unstow_directory(
         &self,
         package_dir: &Path,
         target_dir: &Path,
         plan: &mut planner::Plan,
-    ) -> Result<bool> {
+    ) -> Result<PlannedState> {
         // If target doesn't exist, nothing to unstow
         if !target_dir.exists() {
-            return Ok(false);
+            return Ok(PlannedState::Kept);
         }
 
         // Names of target entries that are planned for removal
         let mut removed_names = HashSet::new();
+        // Names of target subdirectories that are refolded, with the directory they link to
+        let mut refolded = HashMap::new();
         // Names of package entries
         let mut package_names = HashSet::new();
 
@@ -101,14 +117,20 @@ impl Unstower {
                 .metadata()
                 .map_err(|e| StowError::io_error(package_item.clone(), e))?;
 
-            let removed = if metadata.is_dir() {
+            let state = if metadata.is_dir() {
                 self.plan_unstow_dir_item(&package_item, &target_item, plan)?
             } else {
                 self.plan_unstow_file(&package_item, &target_item, plan)?
             };
 
-            if removed {
-                removed_names.insert(name_key(&name));
+            match state {
+                PlannedState::Kept => {}
+                PlannedState::Removed => {
+                    removed_names.insert(name_key(&name));
+                }
+                PlannedState::Refolded(link_target) => {
+                    refolded.insert(name_key(&name), link_target);
+                }
             }
         }
 
@@ -131,7 +153,7 @@ impl Unstower {
 
         // Don't try to remove the root target directory
         if *target_dir == self.target_dir {
-            return Ok(false);
+            return Ok(PlannedState::Kept);
         }
 
         // Prune target_dir only if nothing but planned removals is left in it,
@@ -147,24 +169,127 @@ impl Unstower {
             plan.add(planner::Action::RemoveEmptyDir {
                 path: target_dir.to_path_buf(),
             });
-        } else {
-            logger::verbose(&format!(
-                "Keeping non-empty directory: {}",
-                target_dir.display()
-            ));
+            return Ok(PlannedState::Removed);
         }
 
-        Ok(will_be_empty)
+        if !self.no_folding
+            && let Some(fold_target) = self.refold_target(target_dir, &removed_names, &refolded)?
+        {
+            self.plan_refold(target_dir, &fold_target, &removed_names, plan)?;
+            return Ok(PlannedState::Refolded(fold_target));
+        }
+
+        logger::verbose(&format!(
+            "Keeping non-empty directory: {}",
+            target_dir.display()
+        ));
+
+        Ok(PlannedState::Kept)
+    }
+
+    /// Determine whether `target_dir` can be folded again, as GNU Stow does
+    /// This is the case if every entry left in it is a symlink into one and the same
+    /// package directory, under the entry's own name
+    /// Returns that package directory
+    fn refold_target(
+        &self,
+        target_dir: &Path,
+        removed_names: &HashSet<String>,
+        refolded: &HashMap<String, PathBuf>,
+    ) -> Result<Option<PathBuf>> {
+        let mut common_parent: Option<PathBuf> = None;
+
+        let entries = fs::read_dir(target_dir)
+            .map_err(|e| StowError::io_error(target_dir.to_path_buf(), e))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| StowError::io_error(target_dir.to_path_buf(), e))?;
+            let name = entry.file_name();
+            let key = name_key(&name);
+            if removed_names.contains(&key) {
+                continue;
+            }
+
+            let path = entry.path();
+            let link_target = if let Some(link_target) = refolded.get(&key) {
+                link_target.clone()
+            } else if fs_ops::is_symlink(&path) && path.exists() {
+                resolve_link(&path)?
+            } else {
+                // A real file or directory, or a dangling link
+                return Ok(None);
+            };
+
+            let (Some(link_name), Some(parent)) = (link_target.file_name(), link_target.parent())
+            else {
+                return Ok(None);
+            };
+            if name_key(link_name) != key {
+                return Ok(None);
+            }
+
+            match &common_parent {
+                None => common_parent = Some(parent.to_path_buf()),
+                Some(common) if path_utils::paths_equal(common, parent) => {}
+                Some(_) => return Ok(None),
+            }
+        }
+
+        // Only fold into a directory inside a package, never into the stow directory itself
+        Ok(common_parent.filter(|parent| {
+            parent.is_dir()
+                && path_utils::is_within(parent, &self.stow_dir)
+                && !path_utils::paths_equal(parent, &self.stow_dir)
+        }))
+    }
+
+    /// Plan replacing `target_dir` by a directory symlink to `fold_target`
+    fn plan_refold(
+        &self,
+        target_dir: &Path,
+        fold_target: &Path,
+        removed_names: &HashSet<String>,
+        plan: &mut planner::Plan,
+    ) -> Result<()> {
+        logger::verbose(&format!(
+            "Refolding directory: {} -> {}",
+            target_dir.display(),
+            fold_target.display()
+        ));
+
+        // Remove what is left; refolded subdirectories are links once their actions have run
+        let entries = fs::read_dir(target_dir)
+            .map_err(|e| StowError::io_error(target_dir.to_path_buf(), e))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| StowError::io_error(target_dir.to_path_buf(), e))?;
+            let key = name_key(&entry.file_name());
+            if !removed_names.contains(&key) {
+                plan.add(planner::Action::RemoveLink { path: entry.path() });
+            }
+        }
+
+        plan.add(planner::Action::RemoveEmptyDir {
+            path: target_dir.to_path_buf(),
+        });
+
+        let target_parent = target_dir.parent().unwrap_or(target_dir);
+        let target_parent_abs = path_utils::normalize_path(target_parent)?;
+        let relative_path = path_utils::compute_relative_path(&target_parent_abs, fold_target)?;
+        plan.add(planner::Action::CreateDirLink {
+            link_path: target_dir.to_path_buf(),
+            target_path: relative_path,
+        });
+
+        Ok(())
     }
 
     /// Plan unstowing a file
-    /// Returns whether the target link is planned for removal
+    /// Returns what happens to the target entry
     fn plan_unstow_file(
         &self,
         package_file: &Path,
         target_file: &Path,
         plan: &mut planner::Plan,
-    ) -> Result<bool> {
+    ) -> Result<PlannedState> {
         // Check if target is a symlink
         if !fs_ops::is_symlink(target_file) {
             // Not a symlink, might be a conflict or already removed
@@ -172,7 +297,7 @@ impl Unstower {
                 "Target is not a symlink, skipping: {}",
                 target_file.display()
             ));
-            return Ok(false);
+            return Ok(PlannedState::Kept);
         }
 
         if !self.link_points_to(target_file, package_file)? {
@@ -180,7 +305,7 @@ impl Unstower {
                 "Symlink points elsewhere, skipping: {}",
                 target_file.display()
             ));
-            return Ok(false);
+            return Ok(PlannedState::Kept);
         }
 
         // This symlink is from our package, remove it
@@ -188,17 +313,17 @@ impl Unstower {
             path: target_file.to_path_buf(),
         });
 
-        Ok(true)
+        Ok(PlannedState::Removed)
     }
 
     /// Plan unstowing a directory
-    /// Returns whether the target directory or link is planned for removal
+    /// Returns what happens to the target directory or link
     fn plan_unstow_dir_item(
         &self,
         package_dir: &Path,
         target_dir: &Path,
         plan: &mut planner::Plan,
-    ) -> Result<bool> {
+    ) -> Result<PlannedState> {
         // Check if target is a symlink
         if fs_ops::is_symlink(target_dir) {
             if !self.link_points_to(target_dir, package_dir)? {
@@ -206,14 +331,14 @@ impl Unstower {
                     "Directory symlink points elsewhere, skipping: {}",
                     target_dir.display()
                 ));
-                return Ok(false);
+                return Ok(PlannedState::Kept);
             }
 
             // This directory symlink is from our package, remove it
             plan.add(planner::Action::RemoveLink {
                 path: target_dir.to_path_buf(),
             });
-            return Ok(true);
+            return Ok(PlannedState::Removed);
         }
 
         if target_dir.is_dir() {
@@ -226,7 +351,7 @@ impl Unstower {
             target_dir.display()
         ));
 
-        Ok(false)
+        Ok(PlannedState::Kept)
     }
 
     /// Check whether the symlink at `link_path` points to `package_path`

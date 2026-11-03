@@ -150,6 +150,18 @@ The `unstow` command removes symbolic links created by `stow` and prunes empty d
      - Otherwise keep it silently (e.g. `AppData\Roaming\yazi` still containing yazi's `state` directory)
    - The root target directory is never removed.
 
+#### Refolding
+
+After unstowing, a directory that is kept is folded again (aligned with GNU Stow's `foldable`/`fold_tree`) if:
+- every entry left in it is a valid symlink, or a subdirectory that is refolded itself,
+- all of them point into the same package directory, each under its own name,
+- that directory lies inside a package in the stow directory, and
+- `--no-folding` is not set.
+
+The remaining links are removed, the directory is removed, and a directory symlink to the package directory is created instead.
+Refolding works from the leaves up, so nested directories are refolded in one run. The root target directory is never refolded.
+Example: after unstowing `pkgB` from an unfolded `.config` shared with `pkgA`, `.config` is a link to `pkgA\.config` again.
+
 2. **Pruning Rules**:
    - Only prune directories that were created by winstow (or are now empty after link removal).
    - Do not prune directories that existed before stowing (unless they are now empty and were only created to house symlinks).
@@ -307,7 +319,7 @@ winstow --ignore "*.bak" --ignore ".DS_Store" mypackage
 
 ### Aligned Behaviors
 
-1. **Folding/Unfolding**: Matches GNU Stow's directory folding algorithm.
+1. **Folding/Unfolding/Refolding**: Matches GNU Stow's directory folding algorithm, including `--no-folding`.
 2. **Conflict Detection**: Same conflict detection rules (fail on non-link files/dirs).
 3. **Relative Symlinks**: Uses relative paths like GNU Stow.
 4. **Pruning**: Same pruning behavior (remove empty directories after unstowing).

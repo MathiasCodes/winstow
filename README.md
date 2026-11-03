@@ -334,6 +334,13 @@ C:\Users\USER\AppData\Local\
   └── app2 -> C:\Users\USER\Dotfiles\package2\AppData\Local\app2
 ```
 
+### Refolding (Collapsing When Possible)
+
+When a package is unstowed and a directory is left containing only links into
+a single other package's directory, winstow replaces it with a single directory
+symlink again. In the example above, unstowing `package2` turns
+`C:\Users\USER\AppData\Local` back into a link to `package1\AppData\Local`.
+
 ### Disabling Folding
 
 With `--no-folding` (or `no-folding = true` in `.winstowrc`), winstow creates
