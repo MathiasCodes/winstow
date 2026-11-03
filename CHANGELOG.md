@@ -13,9 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unstowing no longer fails with "Directory is not empty" when a parent directory contains other files; such directories are kept
 - Unfolding a directory linked by another package now links both packages' contents instead of reporting a conflict
 - `--override` no longer deletes files of another package through a folded directory link while unfolding
+- `--adopt` and `--override` no longer move or remove files before all conflicts of a package are known; a package with an unresolvable conflict is left unchanged
+- `--override` now replaces file links of other packages instead of failing with `WIN32_ERROR(183)`
+- `--adopt` no longer tries to adopt a file in place of a package directory; this is reported as a conflict
 
 ### Changed
 - Directory symlinks pointing outside the stow directory are reported as conflicts instead of being unfolded
+- All conflicts of a package are reported at once instead of only the first one
+- Dry runs list the files `--adopt` would move and `--override` would remove
+- `--override` never removes symlinks pointing outside the stow directory
 
 ## [v0.3.0] - 2025-01-13
 

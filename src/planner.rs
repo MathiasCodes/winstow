@@ -1,5 +1,5 @@
 use crate::error::{Result, StowError};
-use crate::{fs_ops, logger};
+use crate::{adopt, fs_ops, logger};
 use std::path::PathBuf;
 
 /// Represents an action to be performed during stow/unstow operations
@@ -25,12 +25,22 @@ pub enum Action {
     RemoveLink { path: PathBuf },
     /// Remove an empty directory
     RemoveEmptyDir { path: PathBuf },
+    /// Move a conflicting file from the target into the package (--adopt)
+    AdoptFile {
+        target_path: PathBuf,
+        package_path: PathBuf,
+    },
+    /// Remove a conflicting file or directory with all its contents (--override)
+    RemovePath { path: PathBuf },
 }
 
 /// A plan containing a sequence of actions to execute
+/// Conflicts found while planning are collected, so that all of them can be
+/// reported at once and nothing is changed if there is any
 #[derive(Debug, Default)]
 pub struct Plan {
     actions: Vec<Action>,
+    conflicts: Vec<PathBuf>,
 }
 
 impl Plan {
@@ -44,14 +54,24 @@ impl Plan {
         self.actions.push(action);
     }
 
+    /// Record a path that conflicts with the package
+    pub fn add_conflict(&mut self, path: impl Into<PathBuf>) {
+        self.conflicts.push(path.into());
+    }
+
     /// Get the number of actions in the plan
     pub fn len(&self) -> usize {
         self.actions.len()
     }
 
     /// Execute all actions in the plan
+    /// Fails without changing anything if conflicts have been recorded
     #[must_use = "plan execution can fail and should be checked"]
     pub fn execute(&self, dry_run: bool) -> Result<()> {
+        if !self.conflicts.is_empty() {
+            return Err(StowError::conflicts(self.conflicts.clone()));
+        }
+
         for action in &self.actions {
             execute_action(action, dry_run)?;
         }
@@ -128,6 +148,29 @@ fn execute_action(action: &Action, dry_run: bool) -> Result<()> {
 
             if !dry_run {
                 fs_ops::remove_empty_directory(path)?;
+            }
+        }
+
+        Action::AdoptFile {
+            target_path,
+            package_path,
+        } => {
+            logger::action(&format!(
+                "Adopt file: {} -> {}",
+                target_path.display(),
+                package_path.display()
+            ));
+
+            if !dry_run {
+                adopt::adopt_file(target_path, package_path)?;
+            }
+        }
+
+        Action::RemovePath { path } => {
+            logger::action(&format!("Override (remove): {}", path.display()));
+
+            if !dry_run {
+                adopt::remove_path(path)?;
             }
         }
     }
@@ -213,6 +256,49 @@ mod tests {
         // Dry run should not fail
         let result = plan.execute(true);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn execute_with_conflicts_fails_without_running_actions() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let file = temp_dir.path().join("file.txt");
+        std::fs::write(&file, "keep").unwrap();
+        let mut plan = Plan::new();
+        plan.add(Action::RemovePath { path: file.clone() });
+        plan.add_conflict(temp_dir.path().join("first"));
+        plan.add_conflict(temp_dir.path().join("second"));
+
+        let result = plan.execute(false);
+
+        assert!(matches!(
+            result,
+            Err(StowError::Conflict { ref paths }) if paths.len() == 2
+        ));
+        assert!(file.exists());
+    }
+
+    #[test]
+    fn execute_adopt_and_remove_dry_run_changes_nothing() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let target_file = temp_dir.path().join("target.txt");
+        let package_file = temp_dir.path().join("package.txt");
+        let removed_dir = temp_dir.path().join("dir");
+        std::fs::write(&target_file, "target").unwrap();
+        std::fs::create_dir(&removed_dir).unwrap();
+        let mut plan = Plan::new();
+        plan.add(Action::AdoptFile {
+            target_path: target_file.clone(),
+            package_path: package_file.clone(),
+        });
+        plan.add(Action::RemovePath {
+            path: removed_dir.clone(),
+        });
+
+        plan.execute(true).unwrap();
+
+        assert!(target_file.exists());
+        assert!(!package_file.exists());
+        assert!(removed_dir.exists());
     }
 
     #[test]

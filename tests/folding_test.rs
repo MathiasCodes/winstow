@@ -1,74 +1,10 @@
 // Integration tests for directory folding, unfolding and unstowing of directory links
 // These tests run the winstow binary against temporary stow and target directories
 
+mod common;
+
+use common::{Sandbox, assert_success, exists_at_all, foreign_dir, is_symlink};
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
-use tempfile::TempDir;
-
-/// Temporary stow and target directories for one test
-struct Sandbox {
-    root: TempDir,
-}
-
-impl Sandbox {
-    fn new() -> Self {
-        let root = TempDir::new().unwrap();
-        fs::create_dir(root.path().join("stow")).unwrap();
-        fs::create_dir(root.path().join("target")).unwrap();
-        Self { root }
-    }
-
-    fn stow_dir(&self) -> PathBuf {
-        self.root.path().join("stow")
-    }
-
-    fn target(&self, relative: &str) -> PathBuf {
-        self.root.path().join("target").join(relative)
-    }
-
-    /// Create a file inside a package
-    fn package_file(&self, package: &str, relative: &str, content: &str) -> PathBuf {
-        let path = self.stow_dir().join(package).join(relative);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, content).unwrap();
-        path
-    }
-
-    /// Run winstow with the sandbox's stow and target directories
-    fn winstow(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_winstow"))
-            .current_dir(self.root.path())
-            // Keep configuration files of the machine out of the test
-            .env("USERPROFILE", self.root.path())
-            .env("APPDATA", self.root.path())
-            .arg("-d")
-            .arg(self.stow_dir())
-            .arg("-t")
-            .arg(self.root.path().join("target"))
-            .args(args)
-            .output()
-            .unwrap()
-    }
-}
-
-fn assert_success(output: &Output) {
-    assert!(
-        output.status.success(),
-        "winstow failed:\n{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn is_symlink(path: &Path) -> bool {
-    path.symlink_metadata()
-        .is_ok_and(|metadata| metadata.file_type().is_symlink())
-}
-
-fn exists_at_all(path: &Path) -> bool {
-    path.symlink_metadata().is_ok()
-}
 
 #[test]
 fn stow_missing_target_dir_creates_single_dir_link() {
@@ -253,9 +189,7 @@ fn stow_same_file_into_folded_dir_with_override_keeps_other_package_files() {
 fn stow_over_dir_link_outside_stow_dir_fails_and_keeps_link() {
     let sandbox = Sandbox::new();
     sandbox.package_file("pkg", "config/yazi.toml", "pkg");
-    let foreign = sandbox.root.path().join("foreign");
-    fs::create_dir(&foreign).unwrap();
-    fs::write(foreign.join("keep.txt"), "foreign").unwrap();
+    let foreign = foreign_dir(&sandbox);
     let link = sandbox.target("config");
     std::os::windows::fs::symlink_dir(&foreign, &link).unwrap();
 

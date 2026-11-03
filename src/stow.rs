@@ -1,5 +1,5 @@
 use crate::error::{Result, StowError};
-use crate::{adopt, fs_ops, ignore, logger, path_utils, planner};
+use crate::{fs_ops, ignore, logger, path_utils, planner};
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
@@ -183,17 +183,7 @@ impl Stower {
 
             // Check if it's already a symlink to the same source
             if fs_ops::is_symlink(target_path) {
-                let link_target = fs_ops::read_symlink(target_path)?;
-                let link_target_abs = if link_target.is_relative() {
-                    target_path
-                        .parent()
-                        .unwrap_or(target_path)
-                        .join(&link_target)
-                } else {
-                    link_target.clone()
-                };
-
-                let link_target_norm = path_utils::normalize_path(&link_target_abs)?;
+                let link_target_norm = self.resolve_link(target_path)?;
 
                 if path_utils::paths_equal(&link_target_norm, &source_norm) {
                     // Already linked correctly, skip
@@ -203,21 +193,8 @@ impl Stower {
             }
 
             // Conflict: target exists and is not the right symlink
-            // Handle based on conflict strategy
-            match self.conflict_strategy {
-                ConflictStrategy::Fail => {
-                    return Err(StowError::conflict(target_path));
-                }
-                ConflictStrategy::Adopt => {
-                    // Adopt the file first
-                    adopt::adopt_file(target_path, source_path, self.dry_run)?;
-                    // Now the target is gone, we can link it
-                }
-                ConflictStrategy::Override => {
-                    // Remove the conflicting file
-                    adopt::override_file(target_path, self.dry_run)?;
-                    // Now the target is gone, we can link it
-                }
+            if !self.plan_resolve_conflict(source_path, target_path, plan)? {
+                return Ok(());
             }
         }
 
@@ -303,51 +280,80 @@ impl Stower {
             }
 
             FoldDecision::Conflict => {
-                // Normalize source path once to avoid repeated syscalls
-                let source_norm = path_utils::normalize_path(source_path)?;
+                // Target exists as a file or as a link stow cannot unfold
+                if self.plan_resolve_conflict(source_path, target_path, plan)? {
+                    let source_norm = path_utils::normalize_path(source_path)?;
+                    let target_parent = target_path.parent().unwrap_or(target_path);
+                    let target_parent_abs = path_utils::normalize_path(target_parent)?;
+                    let relative_path =
+                        path_utils::compute_relative_path(&target_parent_abs, &source_norm)?;
 
-                // Target exists as a file
-                match self.conflict_strategy {
-                    ConflictStrategy::Fail => {
-                        return Err(StowError::conflict(target_path));
-                    }
-                    ConflictStrategy::Adopt => {
-                        // Adopt the conflicting file/directory
-                        if target_path.is_dir() {
-                            adopt::adopt_directory(target_path, source_path, self.dry_run)?;
-                        } else {
-                            adopt::adopt_file(target_path, source_path, self.dry_run)?;
-                        }
-                        // Now create the link
-                        let target_parent = target_path.parent().unwrap_or(target_path);
-                        let target_parent_abs = path_utils::normalize_path(target_parent)?;
-                        let relative_path =
-                            path_utils::compute_relative_path(&target_parent_abs, &source_norm)?;
-
-                        plan.add(planner::Action::CreateDirLink {
-                            link_path: target_path.to_path_buf(),
-                            target_path: relative_path,
-                        });
-                    }
-                    ConflictStrategy::Override => {
-                        // Remove the conflicting file/directory
-                        adopt::override_file(target_path, self.dry_run)?;
-                        // Now create the link
-                        let target_parent = target_path.parent().unwrap_or(target_path);
-                        let target_parent_abs = path_utils::normalize_path(target_parent)?;
-                        let relative_path =
-                            path_utils::compute_relative_path(&target_parent_abs, &source_norm)?;
-
-                        plan.add(planner::Action::CreateDirLink {
-                            link_path: target_path.to_path_buf(),
-                            target_path: relative_path,
-                        });
-                    }
+                    plan.add(planner::Action::CreateDirLink {
+                        link_path: target_path.to_path_buf(),
+                        target_path: relative_path,
+                    });
                 }
             }
         }
 
         Ok(())
+    }
+
+    /// Plan how to resolve a conflict at `target_path` according to the conflict strategy
+    /// Returns whether the conflict is resolved, so that the link can be created
+    fn plan_resolve_conflict(
+        &self,
+        source_path: &Path,
+        target_path: &Path,
+        plan: &mut planner::Plan,
+    ) -> Result<bool> {
+        let is_link = fs_ops::is_symlink(target_path);
+
+        match self.conflict_strategy {
+            ConflictStrategy::Fail => {}
+            ConflictStrategy::Adopt => {
+                // Only a real file can take the place of a package file
+                if !is_link && target_path.is_file() && source_path.is_file() {
+                    plan.add(planner::Action::AdoptFile {
+                        target_path: target_path.to_path_buf(),
+                        package_path: source_path.to_path_buf(),
+                    });
+                    return Ok(true);
+                }
+            }
+            ConflictStrategy::Override => {
+                if !is_link {
+                    plan.add(planner::Action::RemovePath {
+                        path: target_path.to_path_buf(),
+                    });
+                    return Ok(true);
+                }
+
+                // Replace links of other packages, but never links the user created
+                let link_target_norm = self.resolve_link(target_path)?;
+                if path_utils::is_within(&link_target_norm, &self.stow_dir) {
+                    plan.add(planner::Action::RemoveLink {
+                        path: target_path.to_path_buf(),
+                    });
+                    return Ok(true);
+                }
+            }
+        }
+
+        plan.add_conflict(target_path);
+        Ok(false)
+    }
+
+    /// Resolve the target of the symlink at `link_path` to an absolute path
+    fn resolve_link(&self, link_path: &Path) -> Result<PathBuf> {
+        let link_target = fs_ops::read_symlink(link_path)?;
+        let link_target_abs = if link_target.is_relative() {
+            link_path.parent().unwrap_or(link_path).join(&link_target)
+        } else {
+            link_target
+        };
+
+        path_utils::normalize_path(&link_target_abs)
     }
 
     /// Decide how to handle a directory
@@ -359,17 +365,7 @@ impl Stower {
 
         // Check if target is a symlink
         if fs_ops::is_symlink(target_path) {
-            let link_target = fs_ops::read_symlink(target_path)?;
-            let link_target_abs = if link_target.is_relative() {
-                target_path
-                    .parent()
-                    .unwrap_or(target_path)
-                    .join(&link_target)
-            } else {
-                link_target.clone()
-            };
-
-            let link_target_norm = path_utils::normalize_path(&link_target_abs)?;
+            let link_target_norm = self.resolve_link(target_path)?;
             let source_norm = path_utils::normalize_path(source_path)?;
 
             if path_utils::paths_equal(&link_target_norm, &source_norm) {
@@ -377,12 +373,12 @@ impl Stower {
                 return Ok(FoldDecision::AlreadyLinked);
             }
 
-            // Only unfold links that stow owns and that point to a directory,
-            // anything else is a link the user created
+            // Only unfold links that stow owns and that point to a directory;
+            // a file link of another package or a link the user created conflicts
             if !link_target_norm.is_dir()
                 || !path_utils::is_within(&link_target_norm, &self.stow_dir)
             {
-                return Err(StowError::conflict(target_path));
+                return Ok(FoldDecision::Conflict);
             }
 
             // Linked to a different package, need to unfold
@@ -443,7 +439,8 @@ impl Stower {
                 replaced_names.insert(new_entry.key.as_str());
                 new_links.push(new_entry);
             } else {
-                return Err(StowError::conflict(target_dir.join(&new_entry.name)));
+                // Keep planning to report every conflict, the plan will not be executed
+                plan.add_conflict(target_dir.join(&new_entry.name));
             }
         }
 

@@ -128,7 +128,7 @@ C:\Users\USER\
 | `-v` | `--verbose` | Enable verbose output |
 | `-n` | `--dry-run` | Preview changes without applying them |
 | | `--adopt` | Move conflicting files into package (stow/restow only) |
-| | `--override` | Remove conflicting files (stow/restow only, destructive) |
+| | `--override` | Remove conflicting files and directories (stow/restow only, destructive) |
 | | `--ignore PATTERN` | Skip files matching pattern (stow/restow only) |
 | | `--defer PATTERN` | Skip files matching pattern if they already exist in target (stow/restow only) |
 | `-h` | `--help` | Show help message |
@@ -181,18 +181,31 @@ winstow -d $USERPROFILE/Dotfiles -t $USERPROFILE Git-Bash
 ### Handling Conflicts
 
 ```bash
-# If files already exist in target, you'll get an error
+# If files already exist in target, you'll get an error listing all conflicts
 winstow mypackage
-# Error: Conflict: C:\Users\You\.gitconfig already exists
+# Error: Conflict: the following paths already exist ...
+#   - C:\Users\You\.gitconfig
 
 # Option 1: Adopt the existing file into the package
 winstow --adopt mypackage
 # Moves .gitconfig into mypackage/, then creates symlink
 
 # Option 2: Override (remove) the existing file
+winstow -n --override mypackage   # preview what would be removed
 winstow --override mypackage
 # Removes .gitconfig, then creates symlink (destructive!)
 ```
+
+winstow checks a package for conflicts before changing anything. If a conflict
+cannot be resolved, it reports every conflicting path and makes no changes, not
+even the moves and removals of `--adopt` and `--override`.
+
+- `--adopt` only adopts real files in place of package files. A file in place of
+  a package directory, or a symlink, remains a conflict.
+- `--override` removes conflicting files and directories, including their
+  contents, and replaces links of other packages. Unlike GNU Stow, it is not
+  limited to links of other packages. Symlinks pointing outside the stow
+  directory are never removed; they remain a conflict.
 
 ### Using Ignore and Defer Patterns
 

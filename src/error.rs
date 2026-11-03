@@ -13,11 +13,12 @@ pub enum StowError {
     )]
     PermissionDenied(String),
 
-    /// Conflict with existing file or directory
+    /// Conflicts with existing files or directories; nothing has been changed
     #[error(
-        "Conflict: {path} already exists and is not a symlink pointing to the package.\n\nTo resolve this conflict, you can:\n  - Use --adopt to move the existing file into the package\n  - Use --override to replace the existing file (destructive)\n  - Manually remove or relocate the conflicting file"
+        "Conflict: the following paths already exist and are not symlinks pointing to the package:\n{}\nNo changes have been made. To resolve the conflicts, you can:\n  - Use --adopt to move existing files into the package\n  - Use --override to replace existing files and directories (destructive)\n  - Manually remove or relocate the conflicting files",
+        format_paths(.paths)
     )]
-    Conflict { path: PathBuf },
+    Conflict { paths: Vec<PathBuf> },
 
     /// Package directory not found
     #[error("Package not found: '{package}' does not exist in stow directory '{stow_dir}'")]
@@ -57,9 +58,17 @@ impl StowError {
         StowError::PermissionDenied(message.into())
     }
 
-    /// Create a new Conflict error
+    /// Create a new Conflict error for a single path
+    #[cfg(test)]
     pub fn conflict(path: impl Into<PathBuf>) -> Self {
-        StowError::Conflict { path: path.into() }
+        StowError::Conflict {
+            paths: vec![path.into()],
+        }
+    }
+
+    /// Create a new Conflict error for several paths
+    pub fn conflicts(paths: Vec<PathBuf>) -> Self {
+        StowError::Conflict { paths }
     }
 
     /// Create a new PackageNotFound error
@@ -107,6 +116,14 @@ impl StowError {
     }
 }
 
+/// Format paths as an indented list, one per line
+fn format_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| format!("  - {}\n", path.display()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +140,17 @@ mod tests {
         let err = StowError::conflict(PathBuf::from("test/path"));
         assert!(err.to_string().contains("Conflict"));
         assert!(err.to_string().contains("test/path"));
+    }
+
+    #[test]
+    fn conflicts_error_lists_every_path() {
+        let err = StowError::conflicts(vec![PathBuf::from("first"), PathBuf::from("second")]);
+
+        let message = err.to_string();
+
+        assert!(message.contains("  - first\n"));
+        assert!(message.contains("  - second\n"));
+        assert!(message.contains("No changes have been made"));
     }
 
     #[test]

@@ -84,11 +84,17 @@ A conflict occurs when:
 - A target path exists and is a regular file or directory (not a symlink)
 - A target path exists and is a symlink pointing to a different package
 
+**Two-phase operation** (aligned with GNU Stow):
+1. **Planning**: The whole package is checked and every action is planned, including the moves of `--adopt` and the removals of `--override`. Conflicts that cannot be resolved are collected instead of stopping at the first one.
+2. **Execution**: Only if no conflict was found, the plan is executed. Otherwise all conflicting paths are reported to stderr and nothing is changed.
+
+A dry run (`-n`) lists every planned action, including the files `--adopt` would move and `--override` would remove.
+The phases apply per package; with several packages, earlier packages are already stowed when a later one conflicts.
+
 **Conflict Handling**:
-- By default, winstow **fails fast** with a clear error message indicating the conflicting path.
-- With `--adopt`: Move conflicting files from the target directory into the stow package, then create symlinks.
-- With `--override`: Remove conflicting files in the target directory and create symlinks (use with caution).
-- Conflicts are reported to stderr with actionable messages.
+- By default, every conflict is reported.
+- With `--adopt`: Move conflicting real files from the target directory into the stow package (replacing the package's version), then create symlinks. A file in place of a package directory and symlinks remain conflicts.
+- With `--override`: Remove conflicting files and directories with their contents, and links of other packages, then create symlinks (use with caution). Unlike GNU Stow, whose `--override=REGEX` only replaces links of other packages, real files are removed as well. Symlinks pointing outside the stow directory are never removed and remain conflicts.
 
 #### Relative Symlinks
 
@@ -219,7 +225,7 @@ Only one action flag can be specified at a time.
 These options only apply to stow and restow actions:
 
 - `--adopt` - Move conflicting files from target into stow package, then create symlinks
-- `--override` - Remove conflicting files in target directory and create symlinks (destructive)
+- `--override` - Remove conflicting files and directories in target directory and create symlinks (destructive)
 
 ### Pattern Options
 
@@ -281,6 +287,8 @@ winstow --ignore "*.bak" --ignore ".DS_Store" mypackage
    - Windows-specific error messages for permission issues
 
 3. **Configuration File Format**: winstow uses a Windows-appropriate configuration file location (`%USERPROFILE%\.winstowrc` or `%APPDATA%\winstow\config.toml`) rather than Unix-style dotfiles in `$HOME`.
+
+4. **`--override` Scope**: `--override` is a flag that removes any conflicting file or directory and replaces links of other packages. GNU Stow's `--override=REGEX` only replaces links of other packages matching the pattern.
 
 ### Aligned Behaviors
 
