@@ -1,6 +1,6 @@
 mod common;
 
-use common::{Sandbox, assert_success, is_symlink};
+use common::{Sandbox, assert_success, is_symlink, output_text};
 use std::fs;
 
 #[test]
@@ -123,4 +123,42 @@ fn translated_directory_can_refold_when_children_need_no_translation() {
         "a"
     );
     assert!(!sandbox.target(".config/b.txt").exists());
+}
+
+#[test]
+fn translated_name_collision_reports_conflict_before_override() {
+    let sandbox = Sandbox::new();
+    sandbox.package_file("pkg", ".bashrc", "first");
+    sandbox.package_file("pkg", "dot-bashrc", "second");
+    fs::write(sandbox.target(".bashrc"), "keep").unwrap();
+
+    let output = sandbox.winstow(&["--dotfiles", "--override", "pkg"]);
+
+    assert!(!output.status.success());
+    assert!(output_text(&output).to_lowercase().contains("conflict"));
+    assert_eq!(
+        fs::read_to_string(sandbox.target(".bashrc")).unwrap(),
+        "keep"
+    );
+    assert!(!is_symlink(&sandbox.target(".bashrc")));
+}
+
+#[test]
+fn translated_name_collision_during_unfolding_keeps_original_link() {
+    let sandbox = Sandbox::new();
+    sandbox.package_file("pkgA", "config/one", "a");
+    sandbox.package_file("pkgB", "config/.same", "first");
+    sandbox.package_file("pkgB", "config/dot-same", "second");
+
+    assert_success(&sandbox.winstow(&["--dotfiles", "pkgA"]));
+    let output = sandbox.winstow(&["--dotfiles", "pkgB"]);
+
+    assert!(!output.status.success());
+    assert!(output_text(&output).to_lowercase().contains("conflict"));
+    assert!(is_symlink(&sandbox.target("config")));
+    assert_eq!(
+        fs::read_to_string(sandbox.target("config/one")).unwrap(),
+        "a"
+    );
+    assert!(!sandbox.target("config/.same").exists());
 }

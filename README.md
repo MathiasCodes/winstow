@@ -133,7 +133,7 @@ C:\Users\USER\
 | | `--no-folding` | Create real directories instead of directory symlinks, never refold on unstow |
 | | `--ignore PATTERN` | Skip files matching pattern (stow/restow only) |
 | | `--defer PATTERN` | Skip files matching pattern if they already exist in target (stow/restow only) |
-| | `--dotfiles` | Stow `dot-foo` files as `.foo` (stow/restow only) |
+| | `--dotfiles` | Map `dot-foo` to `.foo` during stow, unstow, and restow |
 | `-h` | `--help` | Show help message |
 | `-V` | `--version` | Show version |
 
@@ -213,6 +213,15 @@ winstow --dotfiles -D mypackage
 package entry `dot-bashrc` would be looked up as the literal name `dot-bashrc` in the
 target and the `.bashrc` link would not be removed. Files that already start with `.`
 (e.g. `.gitignore`) are left unchanged.
+
+Ignore and defer patterns match names in the package, before translation. For
+example, use `--ignore dot-secret` to omit `dot-secret`, not `--ignore .secret`.
+If a directory contains a name that needs translation or an ignored entry,
+winstow creates a real target directory and links its eligible contents
+individually. The directory's own name can still be translated and folded:
+`dot-config` can link to `.config` when its children need no translation.
+If two package entries map to the same target name, winstow reports a conflict
+before changing anything, including with `--override`.
 
 ### Handling Conflicts
 

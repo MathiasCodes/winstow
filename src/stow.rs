@@ -143,6 +143,7 @@ impl Stower {
         // Read the source directory contents
         let entries = fs::read_dir(source_dir)
             .map_err(|e| StowError::io_error(source_dir.to_path_buf(), e))?;
+        let mut target_names = HashSet::new();
 
         for entry in entries {
             let entry = entry.map_err(|e| StowError::io_error(source_dir.to_owned(), e))?;
@@ -162,6 +163,10 @@ impl Stower {
                 name.clone()
             };
             let target_path = target_parent.join(&target_name);
+            if !target_names.insert(target_name.to_string_lossy().to_lowercase()) {
+                plan.add_conflict(target_path);
+                continue;
+            }
 
             let metadata = entry
                 .metadata()
@@ -519,6 +524,8 @@ impl Stower {
     ) -> Result<()> {
         let original_entries = self.list_entries(original_target)?;
         let new_entries = self.list_entries(new_source)?;
+        Self::record_entry_collisions(&original_entries, target_dir, plan);
+        Self::record_entry_collisions(&new_entries, target_dir, plan);
 
         let mut replaced_names = HashSet::new();
         let mut merged_dirs = Vec::new();
@@ -604,7 +611,9 @@ impl Stower {
                 dir: link_base.dir.clone(),
                 depth: link_base.depth + 1,
             };
-            for child in self.list_entries(&entry.path)? {
+            let children = self.list_entries(&entry.path)?;
+            Self::record_entry_collisions(&children, &link_path, plan);
+            for child in children {
                 self.plan_unfolded_link(&child, &link_path, &nested_base, plan)?;
             }
             return Ok(());
@@ -659,6 +668,19 @@ impl Stower {
         }
 
         Ok(result)
+    }
+
+    fn record_entry_collisions(
+        entries: &[PackageEntry],
+        target_dir: &Path,
+        plan: &mut planner::Plan,
+    ) {
+        let mut target_names = HashSet::new();
+        for entry in entries {
+            if !target_names.insert(&entry.key) {
+                plan.add_conflict(target_dir.join(&entry.target_name));
+            }
+        }
     }
 }
 
