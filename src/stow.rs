@@ -24,6 +24,8 @@ pub struct Stower {
     conflict_strategy: ConflictStrategy,
     patterns: ignore::PatternSet,
     no_folding: bool,
+    /// Translate `dot-` prefixed names to `.`-prefixed names in the target (--dotfiles)
+    dotfiles: bool,
 }
 
 /// Decision for how to handle a directory
@@ -54,6 +56,7 @@ impl Stower {
             conflict_strategy: context.conflict_strategy(),
             patterns,
             no_folding: context.is_no_folding(),
+            dotfiles: context.is_dotfiles(),
         }
     }
 
@@ -72,6 +75,7 @@ impl Stower {
             conflict_strategy: ConflictStrategy::Fail,
             patterns: ignore::PatternSet::empty(),
             no_folding: false,
+            dotfiles: false,
         }
     }
 
@@ -86,6 +90,13 @@ impl Stower {
     #[cfg(test)]
     pub fn with_patterns(mut self, patterns: ignore::PatternSet) -> Self {
         self.patterns = patterns;
+        self
+    }
+
+    /// Enable dotfiles translation (--dotfiles)
+    #[cfg(test)]
+    pub fn with_dotfiles(mut self, dotfiles: bool) -> Self {
+        self.dotfiles = dotfiles;
         self
     }
 
@@ -132,6 +143,7 @@ impl Stower {
         // Read the source directory contents
         let entries = fs::read_dir(source_dir)
             .map_err(|e| StowError::io_error(source_dir.to_path_buf(), e))?;
+        let mut target_names = HashSet::new();
 
         for entry in entries {
             let entry = entry.map_err(|e| StowError::io_error(source_dir.to_owned(), e))?;
@@ -144,7 +156,17 @@ impl Stower {
                 continue;
             }
 
-            let target_path = target_parent.join(&name);
+            // With --dotfiles, `dot-foo` entries are stowed as `.foo` in the target
+            let target_name = if self.dotfiles {
+                path_utils::dotfiles_name(&name)
+            } else {
+                name.clone()
+            };
+            let target_path = target_parent.join(&target_name);
+            if !target_names.insert(target_name.to_string_lossy().to_lowercase()) {
+                plan.add_conflict(target_path);
+                continue;
+            }
 
             let metadata = entry
                 .metadata()
@@ -248,7 +270,27 @@ impl Stower {
             }
 
             FoldDecision::AlreadyLinked => {
-                logger::verbose(&format!("Already linked: {}", target_path.display()));
+                if self.can_fold(source_path)? {
+                    logger::verbose(&format!("Already linked: {}", target_path.display()));
+                } else {
+                    // A folded link can predate --dotfiles, --ignore, or
+                    // --no-folding. Rebuild its visible entries under a real dir.
+                    plan.add(planner::Action::UnfoldDirLink {
+                        link_path: target_path.to_path_buf(),
+                        original_target: path_utils::normalize_path(source_path)?,
+                    });
+                    let link_base = LinkBase {
+                        dir: path_utils::normalize_path(
+                            target_path.parent().unwrap_or(target_path),
+                        )?,
+                        depth: 1,
+                    };
+                    let entries = self.list_entries(source_path)?;
+                    Self::record_entry_collisions(&entries, target_path, plan);
+                    for entry in entries {
+                        self.plan_unfolded_link(&entry, target_path, &link_base, plan)?;
+                    }
+                }
             }
 
             FoldDecision::Unfold(original_target) => {
@@ -298,7 +340,7 @@ impl Stower {
         target_path: &Path,
         plan: &mut planner::Plan,
     ) -> Result<()> {
-        if self.no_folding {
+        if !self.can_fold(source_path)? {
             plan.add(planner::Action::CreateDir {
                 path: target_path.to_path_buf(),
             });
@@ -319,6 +361,48 @@ impl Stower {
         });
 
         Ok(())
+    }
+
+    /// A directory link exposes the entire source tree. Traverse instead when
+    /// an entry below it must be translated or ignored.
+    fn can_fold(&self, source_path: &Path) -> Result<bool> {
+        if self.no_folding {
+            return Ok(false);
+        }
+
+        let mut pending = vec![source_path.to_path_buf()];
+        let mut visited = HashSet::new();
+        while let Some(dir) = pending.pop() {
+            let canonical = dir
+                .canonicalize()
+                .map_err(|e| StowError::io_error(dir.clone(), e))?;
+            if !visited.insert(canonical) {
+                return Ok(false);
+            }
+
+            let entries = fs::read_dir(&dir).map_err(|e| StowError::io_error(dir.clone(), e))?;
+            for entry in entries {
+                let entry = entry.map_err(|e| StowError::io_error(dir.clone(), e))?;
+                let path = entry.path();
+                let name = entry.file_name();
+                if self.patterns.should_ignore(&path)
+                    || self.dotfiles && path_utils::dotfiles_name(&name) != name
+                {
+                    return Ok(false);
+                }
+
+                // Do not descend into directory symlinks: the planner treats
+                // them as linkable entries too, even when they point upward.
+                let file_type = entry
+                    .file_type()
+                    .map_err(|e| StowError::io_error(path.clone(), e))?;
+                if file_type.is_dir() {
+                    pending.push(path);
+                }
+            }
+        }
+
+        Ok(true)
     }
 
     /// Plan how to resolve a conflict at `target_path` according to the conflict strategy
@@ -462,6 +546,8 @@ impl Stower {
     ) -> Result<()> {
         let original_entries = self.list_entries(original_target)?;
         let new_entries = self.list_entries(new_source)?;
+        Self::record_entry_collisions(&original_entries, target_dir, plan);
+        Self::record_entry_collisions(&new_entries, target_dir, plan);
 
         let mut replaced_names = HashSet::new();
         let mut merged_dirs = Vec::new();
@@ -487,13 +573,13 @@ impl Stower {
                 // Replace the other package's link, its files stay untouched
                 logger::verbose(&format!(
                     "Overriding: {} (stowed by another package)",
-                    target_dir.join(&new_entry.name).display()
+                    target_dir.join(&new_entry.target_name).display()
                 ));
                 replaced_names.insert(new_entry.key.as_str());
                 new_links.push(new_entry);
             } else {
                 // Keep planning to report every conflict, the plan will not be executed
-                plan.add_conflict(target_dir.join(&new_entry.name));
+                plan.add_conflict(target_dir.join(&new_entry.target_name));
             }
         }
 
@@ -511,7 +597,7 @@ impl Stower {
             self.plan_stow_unfolded(
                 &original_entry.path,
                 &new_entry.path,
-                &target_dir.join(&new_entry.name),
+                &target_dir.join(&new_entry.target_name),
                 &nested_base,
                 plan,
             )?;
@@ -537,9 +623,9 @@ impl Stower {
         let mut relative_path: PathBuf = std::iter::repeat_n("..", link_base.depth).collect();
         relative_path.push(base_to_source);
 
-        let link_path = target_dir.join(&entry.name);
+        let link_path = target_dir.join(&entry.target_name);
 
-        if entry.is_dir && self.no_folding {
+        if entry.is_dir && !self.can_fold(&entry.path)? {
             plan.add(planner::Action::CreateDir {
                 path: link_path.clone(),
             });
@@ -547,7 +633,9 @@ impl Stower {
                 dir: link_base.dir.clone(),
                 depth: link_base.depth + 1,
             };
-            for child in self.list_entries(&entry.path)? {
+            let children = self.list_entries(&entry.path)?;
+            Self::record_entry_collisions(&children, &link_path, plan);
+            for child in children {
                 self.plan_unfolded_link(&child, &link_path, &nested_base, plan)?;
             }
             return Ok(());
@@ -587,10 +675,15 @@ impl Stower {
                 .metadata()
                 .map_err(|e| StowError::io_error(path.clone(), e))?;
             let name = entry.file_name();
+            let target_name = if self.dotfiles {
+                path_utils::dotfiles_name(&name)
+            } else {
+                name
+            };
 
             result.push(PackageEntry {
-                key: name.to_string_lossy().to_lowercase(),
-                name,
+                key: target_name.to_string_lossy().to_lowercase(),
+                target_name,
                 path,
                 is_dir: metadata.is_dir(),
             });
@@ -598,13 +691,26 @@ impl Stower {
 
         Ok(result)
     }
+
+    fn record_entry_collisions(
+        entries: &[PackageEntry],
+        target_dir: &Path,
+        plan: &mut planner::Plan,
+    ) {
+        let mut target_names = HashSet::new();
+        for entry in entries {
+            if !target_names.insert(&entry.key) {
+                plan.add_conflict(target_dir.join(&entry.target_name));
+            }
+        }
+    }
 }
 
 /// An entry of a package directory
 struct PackageEntry {
     /// Name for case-insensitive comparison, as Windows does
     key: String,
-    name: OsString,
+    target_name: OsString,
     path: PathBuf,
     is_dir: bool,
 }
@@ -816,5 +922,62 @@ mod tests {
             .with_conflict_strategy(ConflictStrategy::Override);
         let result = stower.stow_package("mypackage");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_stow_with_dotfiles() {
+        let temp_dir = TempDir::new().unwrap();
+        let stow_dir = temp_dir.path().join("stow");
+        let target_dir = temp_dir.path().join("target");
+        fs::create_dir(&stow_dir).unwrap();
+        fs::create_dir(&target_dir).unwrap();
+
+        // Create a package with dot- prefixed files and directories
+        let package_dir = stow_dir.join("mypackage");
+        fs::create_dir(&package_dir).unwrap();
+        File::create(package_dir.join("dot-bashrc")).unwrap();
+        File::create(package_dir.join("regular.txt")).unwrap();
+        fs::create_dir(package_dir.join("dot-git")).unwrap();
+        File::create(package_dir.join("dot-git").join("config")).unwrap();
+
+        let stower = Stower::new(&stow_dir, &target_dir, false, false).with_dotfiles(true);
+
+        let result = stower.stow_package("mypackage");
+        assert!(result.is_ok(), "{:?}", result);
+
+        // dot-bashrc should be stowed as .bashrc
+        assert!(target_dir.join(".bashrc").exists());
+        assert!(fs_ops::is_symlink(&target_dir.join(".bashrc")));
+
+        // Regular files are unchanged
+        assert!(target_dir.join("regular.txt").exists());
+
+        // dot-git directory should be stowed as .git
+        assert!(target_dir.join(".git").join("config").exists());
+
+        // The dot- names should not exist in the target
+        assert!(!target_dir.join("dot-bashrc").exists());
+        assert!(!target_dir.join("dot-git").exists());
+    }
+
+    #[test]
+    fn test_stow_without_dotfiles_leaves_names_unchanged() {
+        let temp_dir = TempDir::new().unwrap();
+        let stow_dir = temp_dir.path().join("stow");
+        let target_dir = temp_dir.path().join("target");
+        fs::create_dir(&stow_dir).unwrap();
+        fs::create_dir(&target_dir).unwrap();
+
+        let package_dir = stow_dir.join("mypackage");
+        fs::create_dir(&package_dir).unwrap();
+        File::create(package_dir.join("dot-bashrc")).unwrap();
+
+        let stower = Stower::new(&stow_dir, &target_dir, false, false);
+        let result = stower.stow_package("mypackage");
+        assert!(result.is_ok(), "{:?}", result);
+
+        // Without --dotfiles, the literal name is used
+        assert!(target_dir.join("dot-bashrc").exists());
+        assert!(!target_dir.join(".bashrc").exists());
     }
 }

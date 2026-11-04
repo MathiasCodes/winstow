@@ -37,7 +37,11 @@ impl Sandbox {
 
     /// Run winstow with the sandbox's stow and target directories
     pub fn winstow(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_winstow"))
+        let binary = std::env::var_os("WINSTOW_TEST_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_winstow")));
+
+        Command::new(binary)
             .current_dir(self.root.path())
             // Keep configuration files of the machine out of the test
             .env("USERPROFILE", self.root.path())

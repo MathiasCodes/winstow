@@ -8,10 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `--dotfiles` option to stow `dot-` prefixed entries as `.`-prefixed; use it with unstow and restow as well (contributed by @goiaciprian)
 - `--no-folding` option and `no-folding` configuration key to create real directories instead of directory symlinks
 - Unstowing refolds directories that only contain links into a single package directory, as GNU Stow does
 
 ### Fixed
+- Dotfiles translation now works when folded directories are unfolded, and directories with translated or ignored descendants remain unfolded
+- Package entries that translate to the same target name are reported as conflicts before any files are changed
 - Stowing a package whose directory is already folded no longer fails with `WIN32_ERROR(183)`
 - Unstowing and restowing folded directories no longer fails with "access denied"; directory symlinks are now removed with `remove_dir`
 - Unstowing no longer fails with "Directory is not empty" when a parent directory contains other files; such directories are kept

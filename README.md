@@ -21,6 +21,7 @@ I'm still learning Rust, so the code may not be the most idiomatic or efficient.
 - ✅ **Directory Folding**: Intelligent directory symlinking reduces link count
 - ✅ **Conflict Resolution**: `--adopt` and `--override` for handling existing files
 - ✅ **Pattern Matching**: `--ignore` and `--defer` for flexible file management
+- ✅ **Dotfiles Support**: `--dotfiles` to stow `dot-foo` files as `.foo` (like GNU Stow)
 - ✅ **Configuration Files**: Set defaults with `.winstowrc`
 - ✅ **Small & Fast**: Single ~600KB binary
 - ✅ **Safe**: Dry-run mode to preview changes before applying
@@ -132,6 +133,7 @@ C:\Users\USER\
 | | `--no-folding` | Create real directories instead of directory symlinks, never refold on unstow |
 | | `--ignore PATTERN` | Skip files matching pattern (stow/restow only) |
 | | `--defer PATTERN` | Skip files matching pattern if they already exist in target (stow/restow only) |
+| | `--dotfiles` | Map `dot-foo` to `.foo` during stow, unstow, and restow |
 | `-h` | `--help` | Show help message |
 | `-V` | `--version` | Show version |
 
@@ -178,6 +180,48 @@ winstow -d $USERPROFILE/Dotfiles -t $USERPROFILE Git-Bash
 
 # Now .gitconfig, .bashrc, and .inputrc are symlinks to your Dotfiles packages
 ```
+
+### Stowing Files with `dot-` Names
+
+Some people version-control their dotfiles without the leading dot (git ignores links
+to its own dotfiles inside the repo, and files without a leading dot are easier to see
+in editors/explorers). With `--dotfiles`, files and directories named `dot-foo` are
+stowed as `.foo`, matching GNU Stow behavior:
+
+```bash
+# Package layout (no leading dots)
+mypackage/
+├── dot-gitconfig
+├── dot-bashrc
+└── dot-config/
+    └── nvim/
+        └── init.lua
+
+# Stow with translation
+winstow --dotfiles mypackage
+
+# Result: ~/.gitconfig, ~/.bashrc, ~/.config/nvim/init.lua are symlinks
+```
+
+When unstowing, use the same flag so the links are found and removed:
+
+```bash
+winstow --dotfiles -D mypackage
+```
+
+**Note:** `--dotfiles` must be passed consistently for both stow and unstow — otherwise
+package entry `dot-bashrc` would be looked up as the literal name `dot-bashrc` in the
+target and the `.bashrc` link would not be removed. Files that already start with `.`
+(e.g. `.gitignore`) are left unchanged.
+
+Ignore and defer patterns match names in the package, before translation. For
+example, use `--ignore dot-secret` to omit `dot-secret`, not `--ignore .secret`.
+If a directory contains a name that needs translation or an ignored entry,
+winstow creates a real target directory and links its eligible contents
+individually. The directory's own name can still be translated and folded:
+`dot-config` can link to `.config` when its children need no translation.
+If two package entries map to the same target name, winstow reports a conflict
+before changing anything, including with `--override`.
 
 ### Handling Conflicts
 
@@ -303,6 +347,9 @@ verbose = false
 
 # Create real directories instead of directory symlinks
 no-folding = false
+
+# Enable dotfiles translation by default (--dotfiles)
+dotfiles = false
 ```
 
 CLI arguments always override config file settings.
@@ -471,6 +518,13 @@ cargo test -- --nocapture
 # Tests requiring symlink creation (needs Developer Mode)
 cargo test -- --ignored
 ```
+
+On Windows systems that use Docker instead of a local Rust toolchain, run
+`bash check-windows-docker.sh` from Git Bash. This builds `winstow.exe` and the
+test executables in Docker, then runs the tests on Windows so symlink behavior
+is tested on the actual host. The script expects the `rust-docker` skill scripts
+in `~/.claude/skills/rust-docker/scripts`; set `RUST_DOCKER_SCRIPTS` if they
+are installed elsewhere. Docker Desktop and Developer Mode must be enabled.
 
 ## Contributing
 
