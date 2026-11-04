@@ -7,8 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.4.0] - 2026-11-04
+
 ### Added
-- `--dotfiles` option to stow `dot-` prefixed entries as `.`-prefixed; use it with unstow and restow as well (contributed by @goiaciprian)
+- `--dotfiles` option and `dotfiles` configuration key to stow `dot-` prefixed entries as `.`-prefixed; use the setting with unstow and restow as well (contributed by @goiaciprian)
 - `--no-folding` option and `no-folding` configuration key to create real directories instead of directory symlinks
 - Unstowing refolds directories that only contain links into a single package directory, as GNU Stow does
 
